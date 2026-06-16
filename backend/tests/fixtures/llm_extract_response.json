@@ -1,0 +1,22 @@
+{
+  "title": "Atomic Habits: Building Systems for Lasting Change",
+  "summary": "James Clear explains how tiny, consistent actions compound into remarkable results over time. He argues that identity, not outcomes, is the lever that makes habits stick, and shows how stacking keystone habits can transform personal and professional systems. The talk closes with practical frameworks for redesigning one's environment to make the right behaviors obvious and easy.",
+  "insights": [
+    "Build identity-based habits, not outcome-based goals",
+    "Make the cue for the desired behavior obvious in your environment",
+    "Stack new habits immediately after existing ones to leverage momentum",
+    "Reduce friction for the behaviors you want more of",
+    "Track your habits to make the invisible visible and reinforce commitment",
+    "Use a two-minute rule to start any new habit without overwhelming yourself",
+    "Reframe setbacks as part of the process, not failures of character"
+  ],
+  "chapters": [
+    { "start_seconds": 0.0,   "end_seconds": 60.0,  "title": "Why small habits matter" },
+    { "start_seconds": 60.0,  "end_seconds": 180.0, "title": "Identity vs outcome" },
+    { "start_seconds": 180.0, "end_seconds": 300.0, "title": "The four laws of behavior change" },
+    { "start_seconds": 300.0, "end_seconds": 420.0, "title": "Habit stacking in practice" },
+    { "start_seconds": 420.0, "end_seconds": 600.0, "title": "Designing your environment" }
+  ],
+  "narrative": "Habits are the compound interest of self improvement. A one percent improvement each day, repeated for a year, leaves you thirty seven times better by the end. The same arithmetic works in reverse: small neglects compound into quiet decline. Most people chase outcomes. They set goals to lose twenty pounds, to write a book, to learn a language. Goals are useful for setting direction, but systems are what actually produce results. A goal is a result you want to achieve; a system is the process that leads there. The real leverage, Clear argues, is identity. You do not rise to the level of your goals; you fall to the level of your systems. And the deepest system of all is the kind of person you believe you are. If you want to become a writer, you have to start by being the kind of person who writes every day, however briefly. The cue for any new habit must be made obvious, the response attractive, the response easy, and the reward satisfying. Clear calls these the four laws. The most overlooked of them is the second: make the new behavior attractive. Pair the action you want with something you already enjoy, and the brain begins to anticipate the reward before the work even begins. That anticipation is the seed of consistency. Once the habit is anchored, the rest is patience. You are not chasing the outcome anymore. You are simply showing up to be the person you have chosen to be, day after day, while the outcome takes care of itself.",
+  "filler_removed": 7
+}

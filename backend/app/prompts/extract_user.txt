@@ -1,0 +1,21 @@
+VIDEO METADATA
+==============
+language:        {language}
+duration:        {duration:.1f} seconds
+transcript_chars:{transcript_chars}
+
+SEGMENT ANCHORS
+===============
+Use these {segment_count} segment boundaries to align chapter timestamps.
+The first chapter MUST start at start_seconds=0.0 and the last chapter
+MUST end at end_seconds={duration:.1f}.
+
+{segment_anchors}
+
+TRANSCRIPT
+==========
+{transcript}
+
+{retry_notice}
+
+Return ONLY the JSON object. No prose, no markdown, no commentary.

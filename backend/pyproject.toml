@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "looma"
+version = "0.1.0"
+description = "Convert YouTube links or video uploads into structured, reusable knowledge."
+requires-python = ">=3.11"
+readme = "README.md"
+
+[tool.pytest.ini_options]
+testpaths = ["backend/tests"]
+addopts = "-ra"
+asyncio_mode = "auto"
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"' for fast suites)",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]

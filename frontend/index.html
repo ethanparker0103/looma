@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Looma — Turn videos into knowledge</title>
+  <link rel="stylesheet" href="/styles.css?v=2" />
+</head>
+<body>
+  <header class="site-header">
+    <h1 class="brand">Looma</h1>
+    <p class="tagline">
+      Turn a YouTube link or a video file into a refined title, summary,
+      insights, chapter markers, and an audio-friendly narration.
+    </p>
+  </header>
+
+  <main class="container">
+    <!-- Input section -->
+    <section class="input-card" aria-labelledby="input-heading">
+      <h2 id="input-heading" class="visually-hidden">Choose an input</h2>
+
+      <div class="tabs" role="tablist" aria-label="Input source">
+        <button
+          type="button"
+          role="tab"
+          id="tab-youtube"
+          aria-selected="true"
+          aria-controls="panel-youtube"
+          data-tab="youtube"
+          class="tab tab--active"
+        >YouTube URL</button>
+        <button
+          type="button"
+          role="tab"
+          id="tab-upload"
+          aria-selected="false"
+          aria-controls="panel-upload"
+          data-tab="upload"
+          class="tab"
+          tabindex="-1"
+        >Upload a file</button>
+      </div>
+
+      <div
+        id="panel-youtube"
+        role="tabpanel"
+        aria-labelledby="tab-youtube"
+        class="panel panel--active"
+      >
+        <form id="form-youtube" class="form" autocomplete="off">
+          <label for="youtube-url-input" class="label">YouTube URL</label>
+          <div class="form-row">
+            <input
+              id="youtube-url-input"
+              name="youtube_url"
+              type="url"
+              class="text-input"
+              placeholder="https://www.youtube.com/watch?v=…"
+              required
+            />
+            <button
+              type="submit"
+              id="submit-youtube"
+              class="primary-button"
+            >Generate</button>
+          </div>
+          <p class="hint">
+            Accepts youtube.com, youtu.be, and youtube-nocookie.com URLs.
+          </p>
+        </form>
+      </div>
+
+      <div
+        id="panel-upload"
+        role="tabpanel"
+        aria-labelledby="tab-upload"
+        class="panel"
+        hidden
+      >
+        <form id="form-upload" class="form" enctype="multipart/form-data">
+          <label for="file-input" class="label">Video file</label>
+          <div class="form-row">
+            <input
+              id="file-input"
+              name="file"
+              type="file"
+              class="file-input"
+              accept=".mp4,.mov,.mkv,.webm,video/mp4,video/quicktime,video/webm,video/x-matroska"
+              required
+            />
+            <button
+              type="submit"
+              id="submit-upload"
+              class="primary-button"
+            >Generate</button>
+          </div>
+          <p class="hint">
+            Up to 200&nbsp;MB. Accepts .mp4, .mov, .mkv, .webm.
+          </p>
+        </form>
+      </div>
+    </section>
+
+    <!-- Progress indicator -->
+    <section
+      id="progress"
+      class="progress"
+      aria-live="polite"
+      hidden
+    >
+      <h2 class="progress__heading">Working on it…</h2>
+
+      <div class="progress-bar" id="progress-bar">
+        <div class="progress-bar__fill" id="progress-fill" style="width:0%"></div>
+      </div>
+      <div class="progress-bar__row">
+        <span class="progress-bar__label" id="progress-label">0%</span>
+        <span class="progress-bar__msg" id="progress-msg"></span>
+      </div>
+
+      <ol class="stages" id="stages">
+        <li class="stage" data-stage="downloading">
+          <span class="stage__icon" aria-hidden="true">⏳</span>
+          <span class="stage__label">Downloading</span>
+        </li>
+        <li class="stage" data-stage="transcribing">
+          <span class="stage__icon" aria-hidden="true">⏳</span>
+          <span class="stage__label">Transcribing &amp; extracting</span>
+        </li>
+        <li class="stage" data-stage="done">
+          <span class="stage__icon" aria-hidden="true">⏳</span>
+          <span class="stage__label">Done</span>
+        </li>
+      </ol>
+    </section>
+
+    <!-- Error display -->
+    <section
+      id="error"
+      class="error-card"
+      role="alert"
+      hidden
+    >
+      <h2 class="error-card__heading">Something went wrong</h2>
+      <p id="error-message" class="error-card__message"></p>
+      <p class="error-card__code">
+        Code: <code id="error-code"></code>
+      </p>
+    </section>
+
+    <!-- Results -->
+    <section
+      id="results"
+      class="results"
+      aria-labelledby="results-heading"
+      hidden
+    >
+      <h2 id="results-heading" class="visually-hidden">Results</h2>
+
+      <header class="result-title-row">
+        <h3 id="result-title" class="result-title"></h3>
+        <button
+          type="button"
+          id="copy-md-button"
+          class="secondary-button"
+        >Copy as Markdown</button>
+      </header>
+
+      <div class="result-grid">
+        <article class="result-card">
+          <h4 class="result-card__heading">Summary</h4>
+          <p id="result-summary" class="result-card__body"></p>
+        </article>
+
+        <article class="result-card">
+          <h4 class="result-card__heading">Key insights</h4>
+          <ul id="result-insights" class="insights"></ul>
+        </article>
+
+        <article class="result-card result-card--wide">
+          <h4 class="result-card__heading">Chapters</h4>
+          <ol id="result-chapters" class="chapters"></ol>
+        </article>
+
+        <article class="result-card result-card--wide">
+          <h4 class="result-card__heading">Narration</h4>
+          <audio
+            id="audio-player"
+            class="audio-player"
+            controls
+            preload="metadata"
+          ></audio>
+          <p id="result-narrative" class="result-card__body result-card__body--narrative"></p>
+        </article>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <small>
+      Looma runs locally — your videos never leave this machine.
+    </small>
+  </footer>
+
+  <script src="/app.js?v=2" defer></script>
+</body>
+</html>
