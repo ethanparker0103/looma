@@ -1275,7 +1275,11 @@
         model: modelEl.value,
         debug: debugEl ? debugEl.checked : false,
       });
-      showToast("Settings saved");
+      if (!keyEl.value) {
+        showToast("Settings saved — add an API key later to use AI features");
+      } else {
+        showToast("Settings saved");
+      }
       closeModal();
     });
 
