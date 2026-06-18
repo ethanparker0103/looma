@@ -15,7 +15,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ── Python dependencies ──────────────────────────────────────────
 WORKDIR /app
 COPY backend/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Upgrade pip/setuptools first to avoid pkg_resources errors in Python 3.12
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
+    pip install --no-cache-dir -r requirements.txt
 
 # ── Application code ─────────────────────────────────────────────
 COPY backend/ backend/
