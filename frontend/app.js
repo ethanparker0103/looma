@@ -1350,15 +1350,20 @@
       if (data && data.transcription) {
         var t = data.transcription;
 
-        // Build basic chapters from Whisper segments (no LLM titles)
+        // Build basic chapters from Whisper segments (use segment text as title)
         var basicChapters = [];
         if (data.segments && data.segments.length > 0) {
           var segs = data.segments;
           for (var si = 0; si < segs.length; si++) {
+            var segText = (segs[si].text || "").trim();
+            // Truncate long segment text for the chapter display
+            var title = segText.length > 100
+              ? segText.substring(0, 97) + "…"
+              : segText;
             basicChapters.push({
               start_seconds: segs[si].start,
               end_seconds: segs[si].end,
-              title: "",  // empty title — LLM needed to name this segment
+              title: title,
             });
           }
         }
