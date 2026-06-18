@@ -587,3 +587,75 @@ a { color: var(--accent); }
 #settings-test-result.success { color: var(--success); }
 #settings-test-result.error { color: var(--error-text); }
 
+/* --- Toggle switch (for Debug Mode) --------------------------------------- */
+
+.settings-divider {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 0.5rem 0;
+}
+
+.toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.5rem 0;
+  cursor: pointer;
+}
+
+.toggle-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  flex: 1;
+}
+
+.toggle-hint {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  font-style: italic;
+  font-weight: normal;
+}
+
+.toggle-input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+.toggle-slider {
+  position: relative;
+  width: 44px;
+  height: 24px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  transition: background 0.2s ease, border-color 0.2s ease;
+  flex-shrink: 0;
+}
+
+.toggle-slider::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  background: var(--text-dim);
+  border-radius: 50%;
+  transition: transform 0.2s ease, background 0.2s ease;
+}
+
+.toggle-input:checked + .toggle-slider {
+  background: rgba(255, 122, 89, 0.2);
+  border-color: var(--accent);
+}
+
+.toggle-input:checked + .toggle-slider::after {
+  transform: translateX(20px);
+  background: var(--accent);
+}
+

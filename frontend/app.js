@@ -615,11 +615,112 @@
   //   GET  /api/jobs/{id}/result → LoomaResult
   // On any failure the input is preserved so the user can retry
   // without re-typing.
+  // On any failure the input is preserved so the user can retry
+  // without re-typing.
+
+  // --- Mock transcription (Debug Mode) -------------------------------------
+  //
+  // When Debug Mode is enabled in Settings, we skip the real backend
+  // pipeline and simulate a 10-second transcription flow.  This lets
+  // you test the LLM extraction UI without waiting for Whisper.
+
+  function runMockTranscription() {
+    var mockPhases = [
+      { delay: 1500, status: "downloading", msg: "Downloading audio", pct: 5 },
+      { delay: 3000, status: "downloading", msg: "Downloading audio", pct: 10 },
+      { delay: 5000, status: "transcribing", msg: "Transcribing audio (33%)", pct: 35 },
+      { delay: 7000, status: "transcribing", msg: "Transcribing audio (66%)", pct: 55 },
+      { delay: 9000, status: "transcribing", msg: "Transcribing audio (100%)", pct: 85 },
+    ];
+
+    var mockResult = {
+      status: 200,
+      data: {
+        transcription: {
+          transcript: "So today I want to talk about building better products. " +
+            "The key insight is that you need to understand your users deeply before writing any code. " +
+            "Many teams jump straight into implementation without proper research. " +
+            "That's a mistake that costs time and money. Instead, start with user interviews. " +
+            "Talk to at least ten potential users. Understand their pain points. " +
+            "Map out their workflow. Then and only then should you think about solutions. " +
+            "Another important lesson is to build iteratively. Don't try to ship everything at once. " +
+            "Launch with a minimal viable product and gather feedback. " +
+            "Use that feedback to improve your product. " +
+            "This approach has been proven to work at companies like Dropbox and Airbnb. " +
+            "Finally, remember that great products are built by great teams. " +
+            "Invest in your team's culture and processes. " +
+            "The best technology in the world won't save a product if the team isn't aligned.",
+          segments: [
+            { start: 0.0, end: 5.0, text: "So today I want to talk about building better products." },
+            { start: 5.0, end: 12.0, text: "The key insight is that you need to understand your users deeply before writing any code." },
+            { start: 12.0, end: 16.0, text: "Many teams jump straight into implementation without proper research." },
+            { start: 16.0, end: 19.0, text: "That's a mistake that costs time and money." },
+            { start: 19.0, end: 24.0, text: "Instead, start with user interviews." },
+            { start: 24.0, end: 29.0, text: "Talk to at least ten potential users." },
+            { start: 29.0, end: 33.0, text: "Understand their pain points." },
+            { start: 33.0, end: 38.0, text: "Map out their workflow." },
+            { start: 38.0, end: 43.0, text: "Then and only then should you think about solutions." },
+            { start: 43.0, end: 50.0, text: "Another important lesson is to build iteratively." },
+            { start: 50.0, end: 56.0, text: "Don't try to ship everything at once." },
+            { start: 56.0, end: 62.0, text: "Launch with a minimal viable product and gather feedback." },
+            { start: 62.0, end: 68.0, text: "Use that feedback to improve your product." },
+            { start: 68.0, end: 74.0, text: "This approach has been proven to work at companies like Dropbox and Airbnb." },
+            { start: 74.0, end: 81.0, text: "Finally, remember that great products are built by great teams." },
+            { start: 81.0, end: 87.0, text: "Invest in your team's culture and processes." },
+            { start: 87.0, end: 90.0, text: "The best technology in the world won't save a product if the team isn't aligned." },
+          ],
+          language: "en",
+          duration_seconds: 90.0,
+        },
+        segments: [
+          { start: 0.0, end: 5.0, text: "So today I want to talk about building better products." },
+          { start: 5.0, end: 12.0, text: "The key insight is that you need to understand your users deeply before writing any code." },
+          { start: 12.0, end: 16.0, text: "Many teams jump straight into implementation without proper research." },
+          { start: 16.0, end: 19.0, text: "That's a mistake that costs time and money." },
+          { start: 19.0, end: 24.0, text: "Instead, start with user interviews." },
+          { start: 24.0, end: 29.0, text: "Talk to at least ten potential users." },
+          { start: 29.0, end: 33.0, text: "Understand their pain points." },
+          { start: 33.0, end: 38.0, text: "Map out their workflow." },
+          { start: 38.0, end: 43.0, text: "Then and only then should you think about solutions." },
+          { start: 43.0, end: 50.0, text: "Another important lesson is to build iteratively." },
+          { start: 50.0, end: 56.0, text: "Don't try to ship everything at once." },
+          { start: 56.0, end: 62.0, text: "Launch with a minimal viable product and gather feedback." },
+          { start: 62.0, end: 68.0, text: "Use that feedback to improve your product." },
+          { start: 68.0, end: 74.0, text: "This approach has been proven to work at companies like Dropbox and Airbnb." },
+          { start: 74.0, end: 81.0, text: "Finally, remember that great products are built by great teams." },
+          { start: 81.0, end: 87.0, text: "Invest in your team's culture and processes." },
+          { start: 87.0, end: 90.0, text: "The best technology in the world won't save a product if the team isn't aligned." },
+        ],
+        language: "en",
+        duration_seconds: 90.0,
+      },
+    };
+
+    mockPhases.forEach(function (phase) {
+      setTimeout(function () {
+        setStagesFromStatus(phase.status);
+        updateProgressBar(phase.pct);
+        if (ui.progressMsg) ui.progressMsg.textContent = phase.msg;
+      }, phase.delay);
+    });
+
+    // After 10s, deliver the mock result
+    setTimeout(function () {
+      handleResult(mockResult);
+    }, 10000);
+  }
+
   function runAsyncJob(body, isMultipart, inputId) {
     ui.resultsEl.hidden = true;
     clearError();
     setBusy(true);
     startProgress();
+
+    // === DEBUG MODE: skip the real backend entirely ===
+    if (hasDebugMode()) {
+      runMockTranscription();
+      return;
+    }
 
     apiExtract(body, isMultipart).then(function (submitResp) {
       if (submitResp.status !== 202) {
@@ -726,6 +827,7 @@
     apiKey: "looma_llm_api_key",
     domain: "looma_llm_domain",
     model: "looma_llm_model",
+    debug: "looma_debug_mode",
   };
 
   function loadSettings() {
@@ -734,6 +836,7 @@
       apiKey: localStorage.getItem(SETTINGS_KEYS.apiKey) || "",
       domain: localStorage.getItem(SETTINGS_KEYS.domain) || "",
       model: localStorage.getItem(SETTINGS_KEYS.model) || "",
+      debug: localStorage.getItem(SETTINGS_KEYS.debug) === "true",
     };
   }
 
@@ -742,11 +845,16 @@
     localStorage.setItem(SETTINGS_KEYS.apiKey, s.apiKey);
     localStorage.setItem(SETTINGS_KEYS.domain, s.domain);
     localStorage.setItem(SETTINGS_KEYS.model, s.model);
+    localStorage.setItem(SETTINGS_KEYS.debug, s.debug ? "true" : "false");
   }
 
   function hasValidSettings() {
     var s = loadSettings();
     return !!s.apiKey;
+  }
+
+  function hasDebugMode() {
+    return loadSettings().debug;
   }
 
   // --- LLM provider calls ---------------------------------------------------
@@ -1116,6 +1224,7 @@
     var keyEl = document.getElementById("settings-apikey");
     var domainEl = document.getElementById("settings-domain");
     var modelEl = document.getElementById("settings-model");
+    var debugEl = document.getElementById("settings-debug");
     var testBtn = document.getElementById("settings-test");
     var testResult = document.getElementById("settings-test-result");
 
@@ -1128,6 +1237,7 @@
       keyEl.value = s.apiKey;
       domainEl.value = s.domain;
       modelEl.value = s.model;
+      if (debugEl) debugEl.checked = s.debug;
     }
 
     // Open
@@ -1154,6 +1264,7 @@
         apiKey: keyEl.value,
         domain: domainEl.value,
         model: modelEl.value,
+        debug: debugEl ? debugEl.checked : false,
       });
       showToast("Settings saved");
       closeModal();
@@ -1167,6 +1278,7 @@
           apiKey: keyEl.value,
           domain: domainEl.value,
           model: modelEl.value,
+          debug: debugEl ? debugEl.checked : false,
         };
         // Temporarily save for the test
         var prev = loadSettings();

@@ -256,6 +256,17 @@
             placeholder="gpt-4o-mini (default) or claude-3-5-sonnet-20241022"
           />
 
+          <hr class="settings-divider" />
+
+          <label class="toggle-row">
+            <span class="toggle-label">
+              <strong>Debug Mode</strong>
+              <span class="toggle-hint">Mock a 10s transcription instead of running Whisper</span>
+            </span>
+            <input type="checkbox" id="settings-debug" class="toggle-input" />
+            <span class="toggle-slider"></span>
+          </label>
+
           <div class="settings-actions">
             <button type="button" id="settings-test" class="secondary-button">Test Connection</button>
             <button type="submit" id="settings-save" class="primary-button">Save</button>
