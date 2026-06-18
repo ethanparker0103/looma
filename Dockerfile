@@ -10,6 +10,7 @@ FROM python:3.12-slim
 # ── System dependencies ──────────────────────────────────────────
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Python dependencies ──────────────────────────────────────────
@@ -18,7 +19,9 @@ COPY backend/requirements.txt .
 # Upgrade pip/wheel; pin setuptools<70 to keep pkg_resources (openai-whisper
 # setup.py imports it). Use --no-build-isolation so the build uses host deps.
 RUN pip install --no-cache-dir --upgrade pip 'setuptools<70' wheel && \
-    pip install --no-cache-dir --no-build-isolation -r requirements.txt
+    pip install --no-cache-dir --no-build-isolation -r requirements.txt && \
+    # yt-dlp must be very fresh — YouTube changes its API frequently
+    pip install --no-cache-dir --upgrade yt-dlp certifi
 
 # ── Application code ─────────────────────────────────────────────
 COPY backend/ backend/
