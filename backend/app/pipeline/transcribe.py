@@ -226,30 +226,45 @@ def transcribe(
     # transcribe in one shot.  The frontend will see a single jump to
     # 60 / 85 % which is acceptable for quick jobs.
     if total_duration <= _CHUNK_MAX_SECONDS or total_duration <= 0:
-        try:
-            raw: dict[str, Any] = model.transcribe(str(src), verbose=False)
-        except Exception as exc:
-            raise TranscriptionError(
-                f"Whisper failed to transcribe {src.name!r} "
-                f"with model {name!r}: {exc}"
-            ) from exc
+        return _transcribe_short(src, model, name)
 
-        segments = _whisper_raw_to_segments(raw)
-        language = str(raw.get("language") or DEFAULT_LANGUAGE)
-        transcript = str(raw.get("text") or "").strip()
-        return TranscriptionResult(
-            transcript=transcript,
-            segments=segments,
-            language=language,
-            duration_seconds=_duration_from_segments(segments),
-        )
+    # Chunked transcription for long files.
+    return _transcribe_chunked(
+        src, model, name, total_duration,
+        transcribe_progress_callback=transcribe_progress_callback,
+    )
 
-    # --- Chunked transcription for long files -----------------------
-    #
-    # Divide the audio into N roughly-equal chunks so the progress
-    # callback fires at a human-noticeable cadence.  Each chunk is
-    # extracted with ffmpeg and transcribed independently; results
-    # are merged afterward.
+
+def _transcribe_short(
+    src: Path, model: Any, name: str,
+) -> TranscriptionResult:
+    """Transcribe a short audio file in a single shot."""
+    try:
+        raw: dict[str, Any] = model.transcribe(str(src), verbose=False)
+    except Exception as exc:
+        raise TranscriptionError(
+            f"Whisper failed to transcribe {src.name!r} "
+            f"with model {name!r}: {exc}"
+        ) from exc
+
+    segments = _whisper_raw_to_segments(raw)
+    language = str(raw.get("language") or DEFAULT_LANGUAGE)
+    transcript = str(raw.get("text") or "").strip()
+    return TranscriptionResult(
+        transcript=transcript,
+        segments=segments,
+        language=language,
+        duration_seconds=_duration_from_segments(segments),
+    )
+
+
+def _transcribe_chunked(
+    src: Path, model: Any, name: str,
+    total_duration: float,
+    *,
+    transcribe_progress_callback: Callable[[int], None] | None = None,
+) -> TranscriptionResult:
+    """Divide the audio into chunks and transcribe each independently."""
     chunk_count = min(_MAX_CHUNKS, max(2, int(total_duration / _CHUNK_MAX_SECONDS)))
     chunk_duration = total_duration / chunk_count
     chunk_results: list[dict] = []

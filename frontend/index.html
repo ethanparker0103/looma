@@ -8,7 +8,10 @@
 </head>
 <body>
   <header class="site-header">
-    <h1 class="brand">Looma</h1>
+    <div class="site-header-row">
+      <h1 class="brand">Looma</h1>
+      <button type="button" id="settings-button" class="icon-button" aria-label="Settings" title="Settings">⚙️</button>
+    </div>
     <p class="tagline">
       Turn a YouTube link or a video file into a refined title, summary,
       insights, chapter markers, and an audio-friendly narration.
@@ -195,6 +198,58 @@
         </article>
       </div>
     </section>
+
+    <!-- Settings modal -->
+    <div id="settings-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="settings-heading" hidden>
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2 id="settings-heading">Settings — LLM Configuration</h2>
+          <button type="button" id="settings-close" class="icon-button" aria-label="Close settings">✕</button>
+        </div>
+        <p class="settings-note">
+          Looma uses your own API key for AI-powered extraction.
+          Your key stays in your browser and is never sent to our server.
+        </p>
+        <form id="settings-form" class="form">
+          <label for="settings-provider" class="label">LLM Provider</label>
+          <select id="settings-provider" class="text-input">
+            <option value="openai">OpenAI</option>
+            <option value="anthropic">Claude (Anthropic)</option>
+          </select>
+
+          <label for="settings-apikey" class="label">API Key</label>
+          <input
+            id="settings-apikey"
+            type="password"
+            class="text-input"
+            placeholder="sk-… or , etc."
+            required
+          />
+
+          <label for="settings-domain" class="label">Custom Domain (optional)</label>
+          <input
+            id="settings-domain"
+            type="url"
+            class="text-input"
+            placeholder="https://api.openai.com (default) or a proxy URL"
+          />
+
+          <label for="settings-model" class="label">Model (optional)</label>
+          <input
+            id="settings-model"
+            type="text"
+            class="text-input"
+            placeholder="gpt-4o-mini (default) or claude-3-5-sonnet-20241022"
+          />
+
+          <div class="settings-actions">
+            <button type="button" id="settings-test" class="secondary-button">Test Connection</button>
+            <button type="submit" id="settings-save" class="primary-button">Save</button>
+          </div>
+          <p id="settings-test-result" class="hint" hidden></p>
+        </form>
+      </div>
+    </div>
   </main>
 
   <footer class="site-footer">

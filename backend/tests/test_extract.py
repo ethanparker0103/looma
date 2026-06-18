@@ -496,11 +496,12 @@ def test_extract_knowledge_raises_after_two_failures(
     assert "2 attempts" in str(excinfo.value)
 
 
-def test_extract_knowledge_raises_after_two_post_validation_failures(
+def test_extract_knowledge_raises_after_three_post_validation_failures(
     sample_transcription: TranscriptionResult,
 ) -> None:
     """Both attempts return valid JSON but violate AC-5 length constraints."""
     # Title too long + summary too short -> post-validation failure.
+    # Retry count was bumped from 2 to 3 (previous change) so we expect 3 calls.
     bad_payload = {
         "title": "x" * 200,
         "summary": "One.",
@@ -517,7 +518,7 @@ def test_extract_knowledge_raises_after_two_post_validation_failures(
         with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test"}, clear=False):
             with pytest.raises(LLMSchemaError):
                 extract_knowledge(sample_transcription)
-    assert invoke.call_count == 2
+    assert invoke.call_count == 3
 
 
 def test_extract_knowledge_raises_on_unknown_provider(

@@ -243,6 +243,28 @@ class JobAccepted(BaseModel):
     )
 
 
+class CodeExtractResponse(BaseModel):
+    """Response body for a completed extraction job (BYOK).
+
+    The backend returns the raw transcription; the frontend is
+    responsible for calling the LLM with the user's own API key
+    and rendering the extracted knowledge.
+    """
+
+    transcription: dict[str, Any] = Field(
+        ..., description="Full transcription result as a dict."
+    )
+    segments: list[dict[str, Any]] = Field(
+        ..., description="Time-stamped segments [{start, end, text}]."
+    )
+    language: str = Field(
+        default="en", description="Detected language code."
+    )
+    duration_seconds: float = Field(
+        ..., description="Audio duration in seconds."
+    )
+
+
 def error_response(error: str, code: str) -> dict[str, Any]:
     """Build a dict that matches ErrorResponse.
 

@@ -293,9 +293,9 @@ def test_index_html_has_required_anchors() -> None:
     assert 'id="error"' in html
     assert 'id="error-code"' in html
 
-    # Script and stylesheet links
-    assert 'href="/styles.css"' in html
-    assert 'src="/app.js"' in html
+    # Script and stylesheet links (cache-busting ``?v=N`` suffix is OK)
+    assert 'href="/styles.css' in html
+    assert 'src="/app.js' in html
 
 
 def test_app_js_loads_under_node() -> None:

@@ -377,7 +377,25 @@ def convert_upload_to_mp3(
     src = Path(upload_path)
     out = Path(output_dir)
 
-    # --- 1. Extension check ----------------------------------------------
+    # --- 1. Extension check + size validation -------------------------
+    _validate_upload(src)
+
+    # --- 2. ffmpeg conversion -----------------------------------------
+    out.mkdir(parents=True, exist_ok=True)
+    final_path = out / f"{job_id}.mp3"
+    _run_ffmpeg_convert(src, final_path)
+
+    # --- 3. Output validation -----------------------------------------
+    _validate_output(final_path)
+
+    # --- 4. Delete the original upload (AC-3) -------------------------
+    _delete_original_upload(src)
+
+    return final_path
+
+
+def _validate_upload(src: Path) -> None:
+    """Validate the uploaded file's extension, existence, and size."""
     ext = src.suffix.lower()
     if ext not in SUPPORTED_VIDEO_EXTENSIONS:
         raise UnsupportedMediaError(
@@ -390,7 +408,6 @@ def convert_upload_to_mp3(
             f"Upload file not found at {src!s}."
         )
 
-    # --- 2. Size check ---------------------------------------------------
     max_bytes = MAX_UPLOAD_MB * 1024 * 1024
     size = src.stat().st_size
     if size > max_bytes:
@@ -399,9 +416,9 @@ def convert_upload_to_mp3(
             f"{MAX_UPLOAD_MB}-MB cap ({max_bytes} bytes)."
         )
 
-    # --- 3. ffmpeg conversion -------------------------------------------
-    out.mkdir(parents=True, exist_ok=True)
-    final_path = out / f"{job_id}.mp3"
+
+def _run_ffmpeg_convert(src: Path, final_path: Path) -> None:
+    """Run ffmpeg to convert the uploaded file to a normalized MP3."""
     cmd = _ffmpeg_convert_cmd(src, final_path)
 
     try:
@@ -409,8 +426,6 @@ def convert_upload_to_mp3(
             cmd, capture_output=True, text=True, check=False
         )
     except FileNotFoundError as exc:
-        # ffmpeg is not on PATH. AC-14 catches this at startup, but the
-        # user could have uninstalled ffmpeg between boot and request.
         raise DownloadFailedError(
             "ffmpeg was not found on PATH. "
             "Install it with `apt-get install -y ffmpeg`."
@@ -421,8 +436,6 @@ def convert_upload_to_mp3(
         ) from exc
 
     if result.returncode != 0:
-        # Capture a short tail of stderr for diagnostics without leaking
-        # the entire ffmpeg log into the error message.
         stderr_tail = (result.stderr or "").strip().splitlines()[-3:]
         stderr_hint = ("\n".join(stderr_tail)).strip() or "<no stderr>"
         raise DownloadFailedError(
@@ -430,7 +443,9 @@ def convert_upload_to_mp3(
             f"{src.name}: {stderr_hint}"
         )
 
-    # --- 4. Output validation ------------------------------------------
+
+def _validate_output(final_path: Path) -> None:
+    """Check the converted MP3 exists and is within the size limit."""
     if not final_path.exists():
         raise DownloadFailedError(
             f"ffmpeg reported success but no MP3 was found at "
@@ -448,19 +463,14 @@ def convert_upload_to_mp3(
             f"{MAX_AUDIO_BYTES}-byte cap."
         )
 
-    # --- 5. Delete the original upload (AC-3) ---------------------------
+
+def _delete_original_upload(src: Path) -> None:
+    """Delete the original upload file after conversion (AC-3)."""
     try:
         src.unlink()
     except OSError as exc:
-        # The conversion succeeded; we do not fail the request just
-        # because cleanup is stuck. The orphan file will be reaped by
-        # cleanup_orphan_files in a later round. Surfacing the error as
-        # a warning keeps the user-facing result usable.
         import logging
-
         logging.getLogger(__name__).warning(
             "Could not delete original upload %s after conversion: %s",
             src, exc,
         )
-
-    return final_path

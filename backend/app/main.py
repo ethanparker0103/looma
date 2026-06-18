@@ -1,36 +1,23 @@
-"""FastAPI application (AC-7, AC-8, AC-9, AC-10, AC-11, async flow).
+"""FastAPI application — async job pipeline (BYOK).
 
 This module ships:
 
-* ``GET /audio/{job_id}.mp3`` — serves the TTS-generated narration
-  MP3 from ``data/outputs/<job_id>.mp3`` (AC-7).
-* ``POST /api/extract`` *and* ``POST /api/extract/async`` — both
-  accept either a JSON body with ``youtube_url`` or a multipart
-  upload with ``file`` (AC-2 + AC-3). Both submit the pipeline as a
-  background ``asyncio`` task and return ``202 Accepted`` + ``job_id``
-  in milliseconds (AC-1). The legacy ``/api/extract`` URL is
-  preserved as an alias so any external script / curl that targets
-  it still gets a fast 202 (AC-3) instead of a 524. The two routes
-  share a single :func:`_submit_async_job` helper (AC-4).
-* ``GET /api/jobs?limit=20`` — returns the most recent N jobs
-  as JSON (AC-9). Default page size 20, max 200.
-* ``GET /api/jobs/{job_id}`` — returns the in-memory async job
-  state if present, else falls back to the JSON-backed file.
+* ``POST /api/extract/async`` — accepts a YouTube URL or file upload,
+  runs the backend pipeline (ingest → transcribe), returns 202 + job_id.
+  LLM extraction is handled on the frontend (BYOK).
+* ``GET /api/jobs?limit=20`` — lists recent jobs (AC-9).
+* ``GET /api/jobs/{job_id}`` — returns async job state.
 * ``GET /api/jobs/{job_id}/result`` — returns the
-  :class:`~app.models.LoomaResult` for an async job whose status is
-  ``done``; 409 ``JOB_NOT_READY`` while the job is still running.
-* ``DELETE /api/jobs/{job_id}`` — removes the job row *and* its
-  on-disk MP3s (AC-10).
-* ``GET /`` — serves the single-page frontend (AC-8).
-* ``GET /healthz`` — minimal liveness probe; always 200.
+  :class:`~app.models.TranscriptionResult` for a done job.
+* ``DELETE /api/jobs/{job_id}`` — removes job + files.
+* ``GET /`` — serves the single-page frontend.
+* ``GET /healthz`` — liveness probe.
 
 Startup guards (AC-14)
 ----------------------
 Before the app starts serving traffic we verify that
-``ffmpeg``/``ffprobe`` is on PATH and that at least one LLM API key
-is set (``ANTHROPIC_API_KEY`` or ``OPENAI_API_KEY``). If either is
-missing the process exits non-zero with a one-line actionable error
-so the user can fix their environment without reading the source.
+``ffmpeg``/``ffprobe`` is on PATH. LLM key checks are no longer
+needed — LLM calls are made from the frontend with user-provided keys.
 """
 
 from __future__ import annotations
@@ -67,41 +54,34 @@ from .models import (
     CODE_INVALID_URL,
     CODE_PAYLOAD_TOO_LARGE,
     CODE_UNSUPPORTED_MEDIA,
-    CODE_UNSUPPORTED_SOURCE,
     CODE_INTERNAL,
-    CODE_TTS_FAILED,
     CODE_TRANSCRIPTION_FAILED,
-    CODE_LLM_SCHEMA_ERROR,
     CODE_DOWNLOAD_FAILED,
     CODE_JOB_NOT_READY,
-    CODE_JOB_RUNNING,
+    CodeExtractResponse,
     ErrorResponse,
     JobAccepted,
-    LoomaResult,
+    TranscriptionResult,
     error_response,
 )
-from .pipeline.extract import LLMSchemaError
 from .pipeline.ingest import (
     AudioTooLargeError,
     DownloadFailedError,
     InvalidURLError,
     PayloadTooLargeError,
     UnsupportedMediaError,
-    UnsupportedSourceError,
 )
 from .storage.files import delete_job_files
 from .storage.jobs import (
     JobStatus,
     get_default_db,
 )
-from .pipeline.narrate import TTSError
 from .pipeline.orchestrator import JobSource, run_job, run_job_async
 from .pipeline.transcribe import TranscriptionError
 from .jobs import (
     JobManager,
     JobState,
     JobStatus as AsyncJobStatus,
-    TERMINAL_STATUSES as ASYNC_TERMINAL_STATUSES,
     get_job_manager,
 )
 
@@ -123,19 +103,8 @@ def _check_ffmpeg_or_exit() -> None:
         sys.exit(1)
 
 
-def _check_llm_key_or_warn() -> None:
-    """Warn if no LLM key is configured, but don't crash (AC-14 relax)."""
-    if not os.environ.get("ANTHROPIC_API_KEY") and not os.environ.get("OPENAI_API_KEY"):
-        sys.stderr.write(
-            "WARNING: no LLM API key configured. Set ANTHROPIC_API_KEY or "
-            "OPENAI_API_KEY as an environment variable (or HF Space secret). "
-            "LLM extraction will fail until one is set.\n"
-        )
-
-
-# Run guards at import time.
+# Run guard at import time (AC-14).
 _check_ffmpeg_or_exit()
-_check_llm_key_or_warn()
 
 
 # --- App factory ------------------------------------------------------------
@@ -336,7 +305,7 @@ def create_app() -> FastAPI:
         """Async-submit alias of :func:`api_extract_async` (AC-1, AC-3).
 
         Historically this was the synchronous endpoint that ran the
-        full pipeline and returned the :class:`LoomaResult` inline —
+        full pipeline and returned the :class:`transcription result. inline —
         fine on a fast loopback, but a Cloudflare 524 whenever a real
         source took more than the edge timeout. The contract is now
         identical to ``/api/extract/async``: the handler validates
@@ -367,7 +336,7 @@ def create_app() -> FastAPI:
         itself returns in milliseconds. The client polls
         ``status_url`` (``GET /api/jobs/{id}``) for progress and
         ``result_url`` (``GET /api/jobs/{id}/result``) for the final
-        :class:`LoomaResult`.
+        :class:`transcription result..
 
         The endpoint is the fix for the 524 timeout that the
         synchronous ``/api/extract`` exposes when Cloudflare (or any
@@ -466,14 +435,14 @@ def create_app() -> FastAPI:
     @app.get(
         "/api/jobs/{job_id}/result",
         responses={
-            200: {"description": "The job's final LoomaResult."},
+            200: {"description": "The job's final transcription result."},
             404: {"model": ErrorResponse},
             409: {"model": ErrorResponse},
         },
-        summary="Fetch the final LoomaResult of an async job.",
+        summary="Fetch the final transcription result.of an async job.",
     )
     async def get_async_job_result(job_id: str) -> JSONResponse:
-        """Return the :class:`LoomaResult` of an async job, or 409 if not done.
+        """Return the :class:`transcription result. of an async job, or 409 if not done.
 
         404 if the job_id is unknown. 409 ``JOB_NOT_READY`` if the
         job is still running, failed, or timed out. The body of a
@@ -631,33 +600,54 @@ def create_app() -> FastAPI:
 
 
 async def _submit_async_job(request: Request) -> JSONResponse:
-    """Submit a job asynchronously and return ``202 + job_id``.
+    """Submit a job asynchronously and return ``202 + job_id``."""
+    # --- 1) Parse the request body -------------------------------------
+    parsed = await _parse_request_body(request)
+    if isinstance(parsed, JSONResponse):
+        return parsed
+    youtube_url, upload_path, upload_filename = parsed
 
-    Single source of truth for the submit route (AC-4). Both
-    ``POST /api/extract`` and ``POST /api/extract/async`` delegate to
-    this helper so the request handling — body parsing, validation,
-    in-memory job allocation, background-task spawn, 202 response —
-    lives in exactly one place.
+    # --- 2) Shape validation -------------------------------------------
+    err = _validate_input_shape(youtube_url, upload_path)
+    if err is not None:
+        return err
 
-    Returns:
-        A :class:`JSONResponse` with status 202 and the canonical
-        :class:`~app.models.JobAccepted` body when the submission is
-        accepted. Returns a 4xx :class:`JSONResponse` immediately if
-        the body is malformed, has no input, or carries both a
-        ``youtube_url`` and a file upload.
+    # --- 3) Dedup: reuse existing job for same YouTube video -----------
+    manager = get_job_manager()
+    video_id: str | None = None
+    source_ref = (
+        upload_filename if upload_path is not None else (youtube_url or "")
+    )
 
-    The handler never awaits the pipeline. The heavy work runs in an
-    ``asyncio.create_task`` background coroutine (:func:`_run_async_job`)
-    so the wall-clock time of the request is bounded by the body
-    parse + DB write + task spawn — typically a few milliseconds, well
-    under the 500 ms AC-1 budget.
+    if youtube_url is not None:
+        dedup_result = _try_dedup(youtube_url, manager)
+        if isinstance(dedup_result, JSONResponse):
+            return dedup_result
+        video_id = dedup_result
+        if video_id is not None:
+            source_ref = video_id
+
+    # --- 4) Allocate + spawn + return 202 ------------------------------
+    return _spawn_background_job(
+        youtube_url=youtube_url, upload_path=upload_path,
+        upload_filename=upload_filename, source_ref=source_ref,
+        kind="upload" if upload_path is not None else "youtube",
+        manager=manager, video_id=video_id,
+    )
+
+
+async def _parse_request_body(
+    request: Request,
+) -> tuple[str | None, Path | None, str | None] | JSONResponse:
+    """Parse and validate the request body.
+
+    Returns ``(youtube_url, upload_path, upload_filename)`` on success,
+    or a ``JSONResponse`` error on failure.
     """
     content_type = (request.headers.get("content-type") or "").lower()
     youtube_url: str | None = None
     upload_path: Path | None = None
     upload_filename: str | None = None
-
-    # --- 1) Pre-flight: parse the body ------------------------------
 
     if content_type.startswith("application/json"):
         try:
@@ -684,10 +674,6 @@ async def _submit_async_job(request: Request) -> JSONResponse:
         youtube_url = url_value  # type: ignore[assignment]
         upload = form.get("file")
         if upload is not None and hasattr(upload, "filename"):
-            # ``upload`` is a starlette ``UploadFile`` when parsed
-            # from a multipart form. Spool the bytes to a temp file
-            # so the background task can ``Path(...)``-read it the
-            # same way it reads a YouTube download.
             upload_filename = getattr(upload, "filename", None) or "upload"
             suffix = Path(upload_filename).suffix or ".mp4"
             fd, name = tempfile.mkstemp(suffix=suffix, prefix="upload-")
@@ -705,7 +691,14 @@ async def _submit_async_job(request: Request) -> JSONResponse:
             CODE_INVALID_URL, 400,
         )
 
-    # --- 2) Pre-flight: shape validation ----------------------------
+    return (youtube_url, upload_path, upload_filename)
+
+
+def _validate_input_shape(
+    youtube_url: str | None,
+    upload_path: Path | None,
+) -> JSONResponse | None:
+    """Validate that the request has exactly one input source."""
     if youtube_url is not None and upload_path is not None:
         return _json_error(
             "Provide either youtube_url or file, not both.",
@@ -716,51 +709,52 @@ async def _submit_async_job(request: Request) -> JSONResponse:
             "Missing input: provide youtube_url or a file upload.",
             CODE_INVALID_URL, 400,
         )
+    return None
 
-    # --- 3) Dedup: reuse existing job for same YouTube video ---------
-    # If the user submits the same YouTube URL twice, return the
-    # existing job ID so they don't have to wait for a duplicate
-    # pipeline.  File uploads can't be deduped without a content hash.
-    source_ref = (
-        upload_filename if upload_path is not None else (youtube_url or "")
-    )
-    video_id: str | None = None
-    manager = get_job_manager()
-    if youtube_url is not None:
-        video_id = _extract_youtube_video_id(youtube_url)
-        if video_id is not None:
-            existing = manager.find_by_source_ref(video_id)
-            if existing is not None:
-                body = JobAccepted(
-                    job_id=existing.id,
-                    status=existing.status.value,
-                    status_url=f"/api/jobs/{existing.id}",
-                    result_url=f"/api/jobs/{existing.id}/result",
-                )
-                logger.info(
-                    "dedup: job %s already running for video %s; "
-                    "returning existing job",
-                    existing.id, video_id,
-                )
-                return JSONResponse(
-                    status_code=202,
-                    content=body.model_dump(mode="json"),
-                )
 
-    # --- 4) Allocate the in-memory job ------------------------------
-    kind = "upload" if upload_path is not None else "youtube"
-    # Use the video ID as the stable ``source_ref`` for dedup, not
-    # the full URL (which may differ by tracking parameters, capitalisation, etc.)
-    if youtube_url is not None and video_id is not None:
-        source_ref = video_id
+def _try_dedup(
+    youtube_url: str, manager: JobManager,
+) -> JSONResponse | str | None:
+    """Try to find an existing job for the same YouTube video.
+
+    Returns a ``JSONResponse`` (early return with existing job),
+    a ``str`` (the video ID, for reuse as ``source_ref``), or ``None``
+    (no dedup match).
+    """
+    video_id = _extract_youtube_video_id(youtube_url)
+    if video_id is not None:
+        existing = manager.find_by_source_ref(video_id)
+        if existing is not None:
+            body = JobAccepted(
+                job_id=existing.id,
+                status=existing.status.value,
+                status_url=f"/api/jobs/{existing.id}",
+                result_url=f"/api/jobs/{existing.id}/result",
+            )
+            logger.info(
+                "dedup: job %s already running for video %s; "
+                "returning existing job",
+                existing.id, video_id,
+            )
+            return JSONResponse(
+                status_code=202,
+                content=body.model_dump(mode="json"),
+            )
+    return video_id
+
+
+def _spawn_background_job(
+    *,
+    youtube_url: str | None,
+    upload_path: Path | None,
+    upload_filename: str | None,
+    source_ref: str,
+    kind: str,
+    manager: JobManager,
+    video_id: str | None,
+) -> JSONResponse:
+    """Allocate a job, spawn the background pipeline, return 202."""
     job = manager.create(kind=kind, source_ref=source_ref)
-
-    # --- 4) Spawn the background pipeline task ---------------------
-    # The handler does not await this task — the request returns as
-    # soon as the task is scheduled. The watchdog will cancel it if
-    # it runs past the deadline, the sweeper evicts the state once
-    # it reaches a terminal status, and the task self-cleans its
-    # own temp files in the finally block.
     task = asyncio.create_task(
         _run_async_job(
             job_id=job.id,
@@ -771,11 +765,8 @@ async def _submit_async_job(request: Request) -> JSONResponse:
         name=f"looma-job-{job.id}",
     )
     manager.attach_task(job.id, task)
-    # Detach when the task finishes so the table doesn't grow
-    # forever with completed tasks. Done-callback is fire-and-forget.
     task.add_done_callback(lambda _t, jid=job.id: _on_async_job_done(jid, _t))
 
-    # --- 5) Return 202 + JobAccepted --------------------------------
     body = JobAccepted(
         job_id=job.id,
         status="queued",
@@ -837,22 +828,15 @@ async def _run_async_job(
     upload_path: Path | None,
     upload_filename: str | None,
 ) -> None:
-    """Background coroutine: run the full pipeline for one async job.
+    """Background coroutine: run ingest + transcribe for one async job.
 
     Updates the in-memory :class:`JobState` at three points:
 
-    * ``status=downloading`` just before the ingest stage starts
-      (covers both the YouTube ``yt-dlp`` download and the
-      ffmpeg-from-upload conversion).
-    * ``status=transcribing`` just before the Whisper stage starts
-      (the longest single stage on a CPU-only host).
-    * ``status=done`` with the serialized :class:`LoomaResult` once
-      the pipeline returns, or ``status=failed`` with an
-      ``error: {code, msg}`` on any stage-specific exception.
+    * ``status=downloading`` before the ingest stage.
+    * ``status=transcribing`` before the Whisper stage.
+    * ``status=done`` with the serialized transcription once done.
 
-    The semaphore from :meth:`JobManager.get_semaphore` is awaited
-    first so a single host can't accept more parallel pipelines
-    than :data:`app.config.MAX_CONCURRENT_JOBS`.
+    LLM extraction is handled on the frontend (BYOK).
     """
     manager = get_job_manager()
     semaphore = manager.get_semaphore()
@@ -875,43 +859,9 @@ async def _run_async_job(
                 progress=5,
             )
 
-            # Map orchestrator stage names → the three visible
-            # UI states. The orchestrator emits ``ingest``,
-            # ``transcribe``, ``extract``, ``narrate`` in order;
-            # we fold ``extract`` and ``narrate`` into
-            # ``transcribing`` for the UI (the LLM call and the
-            # TTS synthesis are both sub-second on a healthy
-            # backend, so a separate stage indicator would just
-            # flicker past the user).
-            def _on_stage(stage: str) -> None:
-                if stage == "ingest":
-                    manager.update(
-                        job_id,
-                        status=AsyncJobStatus.DOWNLOADING,
-                        stage_msg="Downloading audio",
-                        progress=10,
-                    )
-                elif stage in ("transcribe", "extract", "narrate"):
-                    label = {
-                        "transcribe": "Transcribing audio",
-                        "extract": "Extracting knowledge",
-                        "narrate": "Generating narration",
-                    }[stage]
-                    manager.update(
-                        job_id,
-                        status=AsyncJobStatus.TRANSCRIBING,
-                        stage_msg=label,
-                        progress=60 if stage == "transcribe" else 85,
-                    )
-
-            # Granular transcribe progress: the Whisper chunking
-            # callback fires a 0..100 percentage that we remap to
-            # the 60-85 range of the overall job progress, so the
-            # frontend bar moves smoothly during the long
-            # CPU-bound transcription step instead of freezing at
-            # 60 % until the stage finishes.
+            # Granular transcribe progress maps 0..100 to 10..90.
             def _on_transcribe_progress(pct: int) -> None:
-                overall = 60 + int(pct * 0.25)
+                overall = 10 + int(pct * 0.80)
                 manager.update(
                     job_id,
                     status=AsyncJobStatus.TRANSCRIBING,
@@ -919,58 +869,27 @@ async def _run_async_job(
                     progress=overall,
                 )
 
-            # ``run_job_async`` wraps the synchronous pipeline in
-            # ``asyncio.to_thread`` so we don't block the event loop
-            # while Whisper is loading / transcribing / narrating.
+            # Run pipeline: ingest → transcribe (BYOK — no extract/narrate).
             result = await run_job_async(
-                job_id=job_id, source=source, progress_callback=_on_stage,
+                job_id=job_id, source=source,
                 transcribe_progress_callback=_on_transcribe_progress,
             )
 
             # --- Finalize ------------------------------------------
-            manager.update(
-                job_id,
-                status=AsyncJobStatus.DONE,
-                stage_msg="Done",
-                progress=100,
-                result=result.model_dump(mode="json"),
-            )
+            _finalize_job(manager, job_id, result)
             logger.info("async job %s done", job_id)
 
     except asyncio.CancelledError:
-        # The watchdog cancelled us because we ran past the deadline.
-        # The watchdog has already flipped status to ``timeout``;
-        # just log and let the finally block clean up the temp file.
         logger.warning("async job %s cancelled (timeout?)", job_id)
         raise
-    except _PIPELINE_EXCEPTIONS as exc:
-        # Stage-specific failure — keep the same shape as the
-        # synchronous endpoint so the JS client can render the
-        # same error UI.
-        status, code = _STAGE_ERROR_MAP[type(exc)]
-        manager.update(
-            job_id,
-            status=AsyncJobStatus.FAILED,
-            stage_msg=exc.message,
-            error={"code": code, "msg": exc.message},
-        )
+    except (DownloadFailedError, TranscriptionError) as exc:
+        _handle_job_exception(manager, job_id, exc)
         logger.warning("async job %s failed: %s", job_id, exc.message)
     except Exception as exc:  # noqa: BLE001 - last-resort
-        manager.update(
-            job_id,
-            status=AsyncJobStatus.FAILED,
-            stage_msg="Internal error",
-            error={"code": CODE_INTERNAL, "msg": f"Internal error: {exc}"},
-        )
+        _handle_job_internal_error(manager, job_id, exc)
         logger.exception("async job %s failed unexpectedly: %s", job_id, exc)
     finally:
-        # Belt-and-braces cleanup if the ingest stage didn't already
-        # unlink the temp file.
-        if upload_path is not None and upload_path.exists():
-            try:
-                upload_path.unlink()
-            except OSError:  # pragma: no cover
-                pass
+        _cleanup_temp_upload(upload_path)
 
 
 def _on_async_job_done(job_id: str, task: "asyncio.Task") -> None:
@@ -985,6 +904,88 @@ def _on_async_job_done(job_id: str, task: "asyncio.Task") -> None:
         get_job_manager().detach_task(job_id)
     except Exception:  # noqa: BLE001 - defensive
         pass
+
+
+# --- Progress update helpers -------------------------------------------------
+
+
+def _update_transcribe_progress(
+    manager: JobManager, job_id: str, pct: int,
+) -> None:
+    """Update the in-memory job state with granular Whisper progress.
+
+    The Whisper chunking callback fires a 0..100 percentage that we
+    remap to the 60-85 range of the overall job progress, so the
+    frontend bar moves smoothly during the long CPU-bound transcription
+    step instead of freezing at 60 % until the stage finishes.
+    """
+    overall = 60 + int(pct * 0.25)
+    manager.update(
+        job_id,
+        status=AsyncJobStatus.TRANSCRIBING,
+        stage_msg=f"Transcribing audio ({pct}%)",
+        progress=overall,
+    )
+
+
+def _finalize_job(
+    manager: JobManager, job_id: str, result: TranscriptionResult,
+) -> None:
+    """Mark an async job as done with the transcription result."""
+    # Wrap the transcription in a CodeExtractResponse for the frontend.
+    response = CodeExtractResponse(
+        transcription=result.model_dump(mode="json"),
+        segments=[
+            {"start": s.start, "end": s.end, "text": s.text}
+            for s in result.segments
+        ],
+        language=result.language,
+        duration_seconds=result.duration_seconds,
+    )
+    manager.update(
+        job_id,
+        status=AsyncJobStatus.DONE,
+        stage_msg="Done",
+        progress=100,
+        result=response.model_dump(mode="json"),
+    )
+
+
+def _handle_job_exception(
+    manager: JobManager, job_id: str, exc: Exception,
+) -> None:
+    """Handle a known pipeline-stage exception."""
+    code = {
+        DownloadFailedError.__name__: CODE_DOWNLOAD_FAILED,
+        TranscriptionError.__name__: CODE_TRANSCRIPTION_FAILED,
+    }.get(type(exc).__name__, CODE_INTERNAL)
+    manager.update(
+        job_id,
+        status=AsyncJobStatus.FAILED,
+        stage_msg=exc.message,  # type: ignore[union-attr]
+        error={"code": code, "msg": exc.message},  # type: ignore[union-attr]
+    )
+
+
+def _handle_job_internal_error(
+    manager: JobManager, job_id: str, exc: Exception,
+) -> None:
+    """Last-resort handler for unexpected exceptions in a background job."""
+    manager.update(
+        job_id,
+        status=AsyncJobStatus.FAILED,
+        stage_msg="Internal error",
+        error={"code": CODE_INTERNAL, "msg": f"Internal error: {exc}"},
+    )
+
+
+def _cleanup_temp_upload(upload_path: Path | None) -> None:
+    """Clean up a temporary upload file if it still exists."""
+    if upload_path is not None and upload_path.exists():
+        try:
+            upload_path.unlink()
+        except OSError:  # pragma: no cover
+            pass
 
 
 def _async_job_to_status_dict(job: JobState) -> dict:
@@ -1055,8 +1056,7 @@ def _validate_youtube_url_field(value: object) -> JSONResponse | None:
 #
 # AC-11 requires every error response to use the canonical
 # ``{"error", "code"}`` body and a proper HTTP status code from
-# the fixed set {400, 404, 413, 415, 500}. Status code 200 is the
-# success path and is not mapped here.
+# the fixed set {400, 404, 413, 415, 500}.
 #
 # This table is the single source of truth for "what machine-readable
 # code goes with what HTTP status when we don't have a more specific
@@ -1108,31 +1108,6 @@ def _machine_code_for_status(status: int) -> str:
     return _STATUS_TO_CODE.get(status, CODE_INTERNAL)
 
 
-# --- AC-11: pipeline-stage exception -> (status, code) ---------------------
-#
-# Every stage in the pipeline raises a stage-specific exception
-# (InvalidURLError, TranscriptionError, TTSError, ...). The API
-# layer maps each one to an HTTP status + machine code. Encoding
-# the mapping as a tuple-by-class table (rather than 9 separate
-# ``except`` blocks) keeps the contract auditable in one place and
-# makes it obvious that there is no overlap between codes.
-_STAGE_ERROR_MAP: dict[type[Exception], tuple[int, str]] = {
-    # 4xx — client errors
-    InvalidURLError:         (400, CODE_INVALID_URL),
-    UnsupportedSourceError:  (400, CODE_UNSUPPORTED_SOURCE),
-    UnsupportedMediaError:   (415, CODE_UNSUPPORTED_MEDIA),
-    PayloadTooLargeError:    (413, CODE_PAYLOAD_TOO_LARGE),
-    AudioTooLargeError:      (413, CODE_PAYLOAD_TOO_LARGE),
-    # 5xx — server / pipeline errors
-    DownloadFailedError:      (500, CODE_DOWNLOAD_FAILED),
-    TranscriptionError:      (500, CODE_TRANSCRIPTION_FAILED),
-    LLMSchemaError:          (500, CODE_LLM_SCHEMA_ERROR),
-    TTSError:                (500, CODE_TTS_FAILED),
-}
-#: Tuple of all stage exceptions the API layer knows how to map.
-#: Used as the ``except`` clause so a new stage just needs to be
-#: added to :data:`_STAGE_ERROR_MAP`.
-_PIPELINE_EXCEPTIONS: tuple[type[Exception], ...] = tuple(_STAGE_ERROR_MAP)
 
 
 def _mark_job_failed(jobs_db, job_id: str, exc: BaseException) -> None:

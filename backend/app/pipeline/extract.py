@@ -280,12 +280,62 @@ def _parse_json(raw: str) -> dict[str, Any]:
       proxies that wrap their reply in a thinking preamble).
     * Leading/trailing triple-backtick JSON fences.
 
+    If the initial parse fails we attempt a lightweight repair pass:
+    * Trim trailing content after the last ``}`` or ``]``.
+    * Close any unterminated string at the end of the JSON.
+    * Remove trailing commas before ``}`` or ``]``.
+
     Raises:
-        json.JSONDecodeError: If the response is not parseable JSON.
+        json.JSONDecodeError: If the response is not parseable JSON
+            even after repair.
     """
     cleaned = _THINK_RE.sub("", raw)
     cleaned = _FENCE_RE.sub("", cleaned).strip()
+
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        # Lightweight repair: try to close the JSON at the last
+        # valid object/array boundary.
+        pass
+
+    # Repair pass 1: strip everything after the last complete `}`
+    repaired = _trim_after_last_brace(cleaned)
+    if repaired != cleaned:
+        try:
+            return json.loads(repaired)
+        except json.JSONDecodeError:
+            pass
+
+    # Repair pass 2: fix trailing comma before close-brace/bracket
+    repaired = _fix_trailing_commas(cleaned)
+    try:
+        return json.loads(repaired)
+    except json.JSONDecodeError:
+        pass
+
+    # All repair attempts failed — raise the original error.
     return json.loads(cleaned)
+
+
+def _trim_after_last_brace(s: str) -> str:
+    """Trim everything after the last ``}`` that looks like a valid end.
+
+    Handles cases where the LLM appends commentary or gets cut off
+    mid-value.
+    """
+    # Find the last `}` that appears to be the end of the JSON object.
+    last_close = s.rfind("}")
+    if last_close < 0:
+        return s
+    return s[: last_close + 1].strip()
+
+
+def _fix_trailing_commas(s: str) -> str:
+    """Remove trailing commas before ``}`` or ``]``."""
+    import re as _re
+
+    return _re.sub(r",\s*([}\]])", r"\1", s)
 
 
 def _narrative_word_count(text: str) -> int:
@@ -547,13 +597,16 @@ def extract_knowledge(
     user_prompt = _render_user_prompt(transcription)
 
     last_error: str | None = None
-    for attempt in (1, 2):
+    for attempt in (1, 2, 3):
         prompt_this_attempt = user_prompt
-        if attempt == 2 and last_error:
+        if attempt >= 2 and last_error:
             prompt_this_attempt = user_prompt + (
                 f"\n\n[RETRY NOTICE — your previous response failed "
                 f"validation with this error: {last_error}. "
-                f"Respond ONLY with the corrected JSON object.]\n"
+                f"Respond ONLY with the corrected JSON object. "
+                f"Make sure ALL strings are properly closed, "
+                f"all special characters are escaped, and the JSON "
+                f"is complete and well-formed.]\n"
             )
 
         try:

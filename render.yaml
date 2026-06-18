@@ -1,0 +1,36 @@
+# Render Blueprint — deploy Looma on Render Free Tier
+# 1. Push this repo to GitHub
+# 2. In Render Dashboard → Blueprint → Connect repo
+# 3. Set env vars (ANTHROPIC_API_KEY or OPENAI_API_KEY)
+# 4. Deploy
+services:
+  - type: web
+    name: looma
+    runtime: python
+    region: singapore  # or oregon / frankfurt — pick closest to your users
+    plan: free
+    buildCommand: |
+      apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*
+      pip install -r backend/requirements.txt
+    startCommand: cd backend && uvicorn app.main:create_app --factory --host 0.0.0.0 --port 10000
+    envVars:
+      - key: WHISPER_MODEL
+        value: tiny        # Free tier has 512MB RAM; "tiny" uses ~75MB
+      - key: MAX_CONCURRENT_JOBS
+        value: "1"         # Free tier: only 1 job at a time
+      - key: MAX_VIDEO_SECONDS
+        value: "600"       # Demo limit: 10-minute videos
+      - key: JOB_TIMEOUT_SECONDS
+        value: "1200"
+      - key: DATA_DIR
+        value: /var/data
+      - key: ANTHROPIC_API_KEY
+        sync: false        # You'll fill this in Render dashboard
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: PYTHON_VERSION
+        value: "3.12"
+    disk:
+      name: data
+      mountPath: /var/data
+      sizeGB: 1

@@ -637,13 +637,574 @@
       });
   }
 
-  // --- Init --------------------------------------------------------
+  // --- BYOK settings (localStorage) ----------------------------------------
+  //
+  // LLM configuration is stored in the browser. The backend never sees it.
+  // Keys are prefixed with ``looma_`` to avoid collisions with other apps.
+
+  var SETTINGS_KEYS = {
+    provider: "looma_llm_provider",
+    apiKey: "looma_llm_api_key",
+    domain: "looma_llm_domain",
+    model: "looma_llm_model",
+  };
+
+  function loadSettings() {
+    return {
+      provider: localStorage.getItem(SETTINGS_KEYS.provider) || "openai",
+      apiKey: localStorage.getItem(SETTINGS_KEYS.apiKey) || "",
+      domain: localStorage.getItem(SETTINGS_KEYS.domain) || "",
+      model: localStorage.getItem(SETTINGS_KEYS.model) || "",
+    };
+  }
+
+  function saveSettings(s) {
+    localStorage.setItem(SETTINGS_KEYS.provider, s.provider);
+    localStorage.setItem(SETTINGS_KEYS.apiKey, s.apiKey);
+    localStorage.setItem(SETTINGS_KEYS.domain, s.domain);
+    localStorage.setItem(SETTINGS_KEYS.model, s.model);
+  }
+
+  function hasValidSettings() {
+    var s = loadSettings();
+    return !!s.apiKey;
+  }
+
+  // --- LLM provider calls ---------------------------------------------------
+
+  var DEFAULT_DOMAINS = {
+    openai: "https://api.openai.com/v1",
+    anthropic: "https://api.anthropic.com",
+  };
+
+  var DEFAULT_MODELS = {
+    openai: "gpt-4o-mini",
+    anthropic: "claude-3-5-sonnet-20241022",
+  };
+
+  function callLLM(systemPrompt, userPrompt) {
+    var settings = loadSettings();
+    var provider = settings.provider;
+    var apiKey = settings.apiKey;
+    if (!apiKey) {
+      return Promise.reject(new Error("No API key configured. Open Settings to add one."));
+    }
+    var domain = settings.domain || DEFAULT_DOMAINS[provider] || DEFAULT_DOMAINS.openai;
+    var model = settings.model || DEFAULT_MODELS[provider] || DEFAULT_MODELS.openai;
+
+    if (provider === "anthropic") {
+      return callAnthropic(systemPrompt, userPrompt, apiKey, domain, model);
+    }
+    // Default: OpenAI API format
+    return callOpenAI(systemPrompt, userPrompt, apiKey, domain, model);
+  }
+
+  function callOpenAI(systemPrompt, userPrompt, apiKey, domain, model) {
+    var url = domain.replace(/\/+$/, "") + "/chat/completions";
+    return fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + apiKey,
+      },
+      body: JSON.stringify({
+        model: model,
+        max_tokens: 4096,
+        temperature: 0.2,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+      }),
+    }).then(function (resp) {
+      if (!resp.ok) {
+        return resp.json().then(function (data) {
+          var msg = (data && data.error && data.error.message) || resp.statusText;
+          throw new Error("OpenAI API error (" + resp.status + "): " + msg);
+        });
+      }
+      return resp.json();
+    }).then(function (data) {
+      return (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || "";
+    });
+  }
+
+  function callAnthropic(systemPrompt, userPrompt, apiKey, domain, model) {
+    var url = domain.replace(/\/+$/, "") + "/v1/messages";
+    return fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: model,
+        max_tokens: 4096,
+        temperature: 0.2,
+        system: systemPrompt,
+        messages: [{ role: "user", content: userPrompt }],
+      }),
+    }).then(function (resp) {
+      if (!resp.ok) {
+        return resp.json().then(function (data) {
+          var msg = (data && data.error && data.error.message) || resp.statusText;
+          throw new Error("Anthropic API error (" + resp.status + "): " + msg);
+        });
+      }
+      return resp.json();
+    }).then(function (data) {
+      // Anthropic returns content blocks
+      if (!data.content) return "";
+      var texts = [];
+      for (var i = 0; i < data.content.length; i++) {
+        if (data.content[i].type === "text") {
+          texts.push(data.content[i].text);
+        }
+      }
+      return texts.join("\n").trim();
+    });
+  }
+
+  // --- JSON repair (ported from backend/app/pipeline/extract.py) -----------
+
+  function stripThinkBlocks(raw) {
+    return raw.replace(/<think>[\s\S]*?<\/think>/g, "");
+  }
+
+  function stripFences(raw) {
+    return raw.replace(/^\s*```(?:json)?\s*|```\s*$/gmi, "").trim();
+  }
+
+  function trimAfterLastBrace(s) {
+    var last = s.lastIndexOf("}");
+    if (last < 0) return s;
+    return s.substring(0, last + 1).trim();
+  }
+
+  function fixTrailingCommas(s) {
+    return s.replace(/,\s*([}\]])/g, "$1");
+  }
+
+  function parseLLMJson(raw) {
+    var cleaned = stripThinkBlocks(raw);
+    cleaned = stripFences(cleaned);
+
+    // Try direct parse first
+    try { return JSON.parse(cleaned); } catch (e) {}
+
+    // Repair pass 1: trim after last brace
+    var repaired = trimAfterLastBrace(cleaned);
+    if (repaired !== cleaned) {
+      try { return JSON.parse(repaired); } catch (e) {}
+    }
+
+    // Repair pass 2: fix trailing commas
+    repaired = fixTrailingCommas(cleaned);
+    try { return JSON.parse(repaired); } catch (e) {}
+
+    // All repairs failed
+    throw new Error("LLM response is not valid JSON even after repair: " + cleaned.substring(0, 200));
+  }
+
+  // --- Post-validation helpers (ported from Python) -------------------------
+
+  function countSentences(text) {
+    if (!text || !text.trim()) return 0;
+    var cleaned = text.replace(/\b(?:e\.g|i\.e|etc|mr|mrs|ms|dr)\./gi, "");
+    var parts = cleaned.split(/[.!?]+(?:\s|$)|[。！？]+/);
+    var count = 0;
+    for (var i = 0; i < parts.length; i++) {
+      if (parts[i].trim()) count++;
+    }
+    return count;
+  }
+
+  function narrativeWordCount(text) {
+    if (!text) return 0;
+    // CJK characters count as one word each
+    var cjk = text.match(/[　-鿿가-힯]/g);
+    var cjkLen = cjk ? cjk.length : 0;
+    // Latin words
+    var latin = text.split(/\s+/).filter(function (w) { return w.trim(); }).length;
+    return cjkLen + latin;
+  }
+
+  // --- Chapter snapping (ported from Python) --------------------------------
+
+  function snapChapters(chapters, segments, duration) {
+    if (!chapters || !chapters.length) return chapters;
+
+    // Collect boundaries from segments
+    var boundaries = [0, duration];
+    if (segments && segments.length) {
+      for (var i = 0; i < segments.length; i++) {
+        boundaries.push(segments[i].start, segments[i].end);
+      }
+    }
+    boundaries.sort(function (a, b) { return a - b; });
+
+    function snap(value) {
+      var closest = boundaries[0];
+      var minDiff = Math.abs(value - closest);
+      for (var j = 1; j < boundaries.length; j++) {
+        var diff = Math.abs(value - boundaries[j]);
+        if (diff < minDiff) { minDiff = diff; closest = boundaries[j]; }
+      }
+      return closest;
+    }
+
+    var snapped = chapters.map(function (ch) {
+      return { start_seconds: snap(ch.start_seconds), end_seconds: snap(ch.end_seconds), title: ch.title || "" };
+    });
+
+    // Force bookends
+    if (snapped.length > 0) {
+      snapped[0].start_seconds = 0;
+      snapped[snapped.length - 1].end_seconds = duration;
+    }
+
+    // Remove duplicates
+    var deduped = [snapped[0]];
+    for (var k = 1; k < snapped.length; k++) {
+      if (snapped[k].start_seconds > deduped[deduped.length - 1].start_seconds) {
+        deduped.push(snapped[k]);
+      }
+    }
+
+    // Force contiguous
+    for (var m = 0; m < deduped.length; m++) {
+      if (m < deduped.length - 1) {
+        deduped[m].end_seconds = deduped[m + 1].start_seconds;
+      } else {
+        deduped[m].end_seconds = duration;
+      }
+      deduped[m].start_seconds = m === 0 ? 0 : deduped[m].start_seconds;
+    }
+
+    return deduped;
+  }
+
+  // --- Build prompts (ported from Python prompt templates) -------------------
+
+  var SYSTEM_PROMPT =
+    "You are Looma's knowledge-extraction engine. You receive a raw\n" +
+    "auto-generated transcript (with timestamps and occasional filler words)\n" +
+    "and you must return a single, strict JSON object that captures the\n" +
+    "*value* of the content — never a verbatim transcript.\n\n" +
+    "Strict output contract\n" +
+    "======================\n" +
+    "You MUST return exactly one JSON object with these keys and no others:\n\n" +
+    '{"title":"...","summary":"...","insights":["..."],"chapters":[{"start_seconds":0,"end_seconds":10,"title":"..."}],"narrative":"...","filler_removed":0}\n\n' +
+    "Rules\n" +
+    "=====\n" +
+    "1. NO prose, NO markdown fences, NO comments outside the JSON object.\n" +
+    "2. Remove filler: um, uh, like, you know, basically, actually, kind of, sort of.\n" +
+    "3. Reframe sentences in clear declarative form.\n" +
+    "4. Insights must be imperative (\"Build a backlog before scaling\").\n" +
+    "5. Chapter timestamps MUST be on segment boundaries. First chapter start=0, last chapter end=duration.\n" +
+    "6. Narrative is TTS-friendly flowing prose, 150-400 words.\n" +
+    "7. filler_removed is your honest count of filler tokens removed.\n\n" +
+    "Return ONLY the JSON object. No prose, no markdown, no commentary.";
+
+  function buildSegmentAnchors(segments) {
+    if (!segments || !segments.length) return "(no segments available)";
+    var lines = [];
+    for (var i = 0; i < segments.length; i++) {
+      var s = segments[i];
+      var pad = (i < 10 ? "00" : i < 100 ? "0" : "");
+      lines.push("[" + pad + i + "] " + s.start.toFixed(1) + "-" + s.end.toFixed(1) + ": " + s.text);
+    }
+    return lines.join("\n");
+  }
+
+  function buildUserPrompt(transcription, retryNotice) {
+    var transcript = transcription.transcription && transcription.transcription.transcript
+      ? transcription.transcription.transcript
+      : "";
+    var segments = transcription.segments || [];
+    var duration = transcription.duration_seconds || 0;
+    var language = transcription.language || "en";
+
+    // Truncate to 30k chars if needed
+    var truncated = transcript;
+    var truncMarker = "";
+    if (transcript.length > 30000) {
+      truncated = transcript.substring(0, 30000) + "\n\n[... transcript truncated ...]";
+      truncMarker = " [TRUNCATED]";
+    }
+
+    var anchors = buildSegmentAnchors(segments);
+    var segCount = segments.length;
+
+    var retry = retryNotice || "";
+
+    return (
+      "VIDEO METADATA\n" +
+      "==============\n" +
+      "language:        " + language + "\n" +
+      "duration:        " + duration.toFixed(1) + " seconds\n" +
+      "transcript_chars:" + transcript.length + truncMarker + "\n\n" +
+      "SEGMENT ANCHORS\n" +
+      "===============\n" +
+      "Use these " + segCount + " segment boundaries to align chapter timestamps.\n" +
+      "The first chapter MUST start at start_seconds=0.0 and the last chapter\n" +
+      "MUST end at end_seconds=" + duration.toFixed(1) + ".\n\n" +
+      anchors + "\n\n" +
+      "TRANSCRIPT\n" +
+      "==========\n" +
+      truncated + "\n\n" +
+      retry +
+      "\n\nReturn ONLY the JSON object. No prose, no markdown, no commentary."
+    );
+  }
+
+  // --- LLM extraction step --------------------------------------------------
+
+  function extractWithLLM(transcription, retries) {
+    if (retries === undefined) retries = 3;
+
+    function attempt(remaining) {
+      var retryNotice = "";
+      if (remaining < retries) {
+        retryNotice = "\n\n[RETRY NOTICE — your previous response failed validation. Respond ONLY with the corrected JSON object. Make sure ALL strings are properly closed, all special characters are escaped, and the JSON is complete and well-formed.]\n";
+      }
+
+      var userPrompt = buildUserPrompt(transcription, retryNotice);
+
+      return callLLM(SYSTEM_PROMPT, userPrompt).then(function (raw) {
+        // Parse
+        var payload;
+        try {
+          payload = parseLLMJson(raw);
+        } catch (e) {
+          if (remaining <= 1) throw new Error("LLM returned invalid JSON after " + retries + " attempts: " + e.message);
+          return attempt(remaining - 1);
+        }
+
+        // Validate required fields
+        if (!payload.title || !payload.summary || !payload.narrative) {
+          if (remaining <= 1) throw new Error("LLM response missing required fields.");
+          return attempt(remaining - 1);
+        }
+
+        // Apply post-validation
+        var issues = [];
+        if (payload.title.length > 120) issues.push("Title too long");
+        var sentCount = countSentences(payload.summary);
+        if (sentCount < 3 || sentCount > 5) issues.push("Summary has " + sentCount + " sentences; need 3-5");
+        if (!payload.insights || payload.insights.length < 5 || payload.insights.length > 10) {
+          issues.push("Insights count: " + (payload.insights ? payload.insights.length : 0) + "; need 5-10");
+        }
+        var wc = narrativeWordCount(payload.narrative);
+        if (wc < 150 || wc > 500) issues.push("Narrative word count: " + wc + "; need 150-500");
+
+        if (issues.length > 0) {
+          if (remaining <= 1) throw new Error("LLM failed validation: " + issues.join("; "));
+          return attempt(remaining - 1);
+        }
+
+        // Snap chapters
+        var chapters = payload.chapters || [];
+        var snappedChapters = snapChapters(
+          chapters,
+          transcription.segments || [],
+          transcription.duration_seconds || 0
+        );
+
+        return {
+          title: payload.title,
+          summary: payload.summary,
+          insights: payload.insights || [],
+          chapters: snappedChapters,
+          narrative: payload.narrative,
+          filler_removed: typeof payload.filler_removed === "number" ? payload.filler_removed : 0,
+        };
+      });
+    }
+
+    return attempt(retries);
+  }
+
+  // --- Settings UI ----------------------------------------------------------
+
+  function initSettings() {
+    var modal = document.getElementById("settings-modal");
+    var openBtn = document.getElementById("settings-button");
+    var closeBtn = document.getElementById("settings-close");
+    var form = document.getElementById("settings-form");
+    var provEl = document.getElementById("settings-provider");
+    var keyEl = document.getElementById("settings-apikey");
+    var domainEl = document.getElementById("settings-domain");
+    var modelEl = document.getElementById("settings-model");
+    var testBtn = document.getElementById("settings-test");
+    var testResult = document.getElementById("settings-test-result");
+
+    if (!modal || !openBtn) return;
+
+    // Load existing settings into form
+    function populateForm() {
+      var s = loadSettings();
+      provEl.value = s.provider;
+      keyEl.value = s.apiKey;
+      domainEl.value = s.domain;
+      modelEl.value = s.model;
+    }
+
+    // Open
+    openBtn.addEventListener("click", function () {
+      populateForm();
+      modal.hidden = false;
+      if (testResult) testResult.hidden = true;
+    });
+
+    // Close
+    function closeModal() {
+      modal.hidden = true;
+    }
+    if (closeBtn) closeBtn.addEventListener("click", closeModal);
+    modal.addEventListener("click", function (e) {
+      if (e.target === modal) closeModal();
+    });
+
+    // Save
+    form.addEventListener("submit", function (e) {
+      e.preventDefault();
+      saveSettings({
+        provider: provEl.value,
+        apiKey: keyEl.value,
+        domain: domainEl.value,
+        model: modelEl.value,
+      });
+      showToast("Settings saved");
+      closeModal();
+    });
+
+    // Test connection
+    if (testBtn) {
+      testBtn.addEventListener("click", function () {
+        var settings = {
+          provider: provEl.value,
+          apiKey: keyEl.value,
+          domain: domainEl.value,
+          model: modelEl.value,
+        };
+        // Temporarily save for the test
+        var prev = loadSettings();
+        saveSettings(settings);
+
+        if (testResult) {
+          testResult.hidden = false;
+          testResult.textContent = "Testing…";
+          testResult.className = "hint";
+        }
+
+        callLLM("Respond with exactly: {\"status\":\"ok\"}", "Say ok")
+          .then(function (raw) {
+            if (testResult) {
+              testResult.textContent = "✓ Connection successful!";
+              testResult.className = "hint success";
+            }
+          })
+          .catch(function (err) {
+            if (testResult) {
+              testResult.textContent = "✗ Connection failed: " + (err.message || "unknown error");
+              testResult.className = "hint error";
+            }
+          })
+          .then(function () {
+            // Restore previous settings
+            saveSettings(prev);
+          });
+      });
+    }
+  }
+
+  // --- Update the async job flow to add LLM extraction step ------------------
+
+  // Override / wrap the handleResult function to add LLM extraction
+  // when the backend returns transcription data.
+
+  var _originalHandleResult = handleResult;
+
+  function handleResult(resp) {
+    if (resp.status === 200) {
+      var data = resp.data;
+
+      // Check if we have transcription data (BYOK path)
+      if (data && data.transcription && hasValidSettings()) {
+        // We have transcription + valid LLM settings — run extraction
+        setBusy(true);
+        ui.progressEl.hidden = false;
+        if (ui.progressMsg) ui.progressMsg.textContent = "Extracting knowledge via LLM…";
+        updateProgressBar(90);
+        setStagesFromStatus("transcribing");
+
+        extractWithLLM(data).then(function (knowledge) {
+          // Build a renderable result object
+          var renderable = {
+            title: knowledge.title,
+            audio_url: "",
+            knowledge: knowledge,
+          };
+          ui.lastResult = renderable;
+          clearError();
+          ui.resultsEl.hidden = false;
+          renderResult(renderable);
+          finishProgress();
+          setBusy(false);
+        }).catch(function (err) {
+          setBusy(false);
+          showError(err.message || "LLM extraction failed.", "LLM_ERROR");
+          ui.progressEl.hidden = true;
+          // Still show the raw transcription so the user can copy it
+          ui.resultsEl.hidden = false;
+          if (data.transcription && data.transcription.transcript) {
+            ui.lastResult = {
+              title: "Transcription only (LLM extraction failed)",
+              knowledge: { summary: data.transcription.transcript, insights: [], chapters: [], narrative: "" },
+            };
+            renderResult(ui.lastResult);
+          }
+        });
+        return;
+      }
+
+      // No LLM configured — render what we have (transcription only)
+      if (data && data.transcription) {
+        var t = data.transcription;
+        ui.lastResult = {
+          title: "Transcription complete",
+          audio_url: "",
+          knowledge: { summary: t.transcript || "", insights: [], chapters: [], narrative: "" },
+        };
+        renderResult(ui.lastResult);
+        finishProgress();
+        // Show a hint about configuring LLM
+        if (!hasValidSettings()) {
+          showToast("Click ⚙️ to add your API key for AI-powered extraction");
+        }
+        return;
+      }
+
+      renderResult(data);
+      finishProgress();
+    } else {
+      var msg = (resp.data && resp.data.error) || "Request failed.";
+      var code = (resp.data && resp.data.code) || "INTERNAL_ERROR";
+      showError(msg, code);
+      ui.progressEl.hidden = true;
+    }
+  }
+
+  // --- Init ---------------------------------------------------------
 
   function init() {
     cacheElements();
     initTabs();
     initForms();
     initCopyButton();
+    initSettings();  // <-- new
     restoreJobFromHash();
   }
 

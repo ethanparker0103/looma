@@ -422,12 +422,17 @@ async def test_api_extract_tts_error_returns_500(
         mock.MagicMock(side_effect=TTSError("edge tts down")),
     )
 
-    _, status_body, _ = await _submit_and_await_done(
+    _, status_body, result_body = await _submit_and_await_done(
         client, url="/api/extract",
         json={"youtube_url": "https://youtu.be/abc"},
     )
-    assert status_body["status"] == "failed"
-    assert status_body["error"]["code"] == CODE_TTS_FAILED
+    # TTS failure is now non-fatal: job completes with text-only results
+    assert status_body["status"] == "done"
+    # audio_url should be empty since TTS degraded gracefully
+    assert result_body["audio_url"] == ""
+    # Text content should still be present
+    assert result_body["title"] == "Smoke"
+    assert result_body["knowledge"]["summary"] == "S. S. S."
 
 
 @pytest.mark.asyncio
