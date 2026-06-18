@@ -1247,6 +1247,15 @@
       if (testResult) testResult.hidden = true;
     });
 
+    // Debug toggle auto-saves immediately (no need to click Save)
+    if (debugEl) {
+      debugEl.addEventListener("change", function () {
+        var s = loadSettings();
+        s.debug = debugEl.checked;
+        saveSettings(s);
+      });
+    }
+
     // Close
     function closeModal() {
       modal.hidden = true;
