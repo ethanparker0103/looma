@@ -123,20 +123,19 @@ def _check_ffmpeg_or_exit() -> None:
         sys.exit(1)
 
 
-def _check_llm_key_or_exit() -> None:
-    """Exit with a clear error if no LLM key is configured (AC-14)."""
+def _check_llm_key_or_warn() -> None:
+    """Warn if no LLM key is configured, but don't crash (AC-14 relax)."""
     if not os.environ.get("ANTHROPIC_API_KEY") and not os.environ.get("OPENAI_API_KEY"):
         sys.stderr.write(
-            "Looma startup aborted: no LLM API key configured. "
-            "Set ANTHROPIC_API_KEY or OPENAI_API_KEY in your environment "
-            "(see .env.example).\n"
+            "WARNING: no LLM API key configured. Set ANTHROPIC_API_KEY or "
+            "OPENAI_API_KEY as an environment variable (or HF Space secret). "
+            "LLM extraction will fail until one is set.\n"
         )
-        sys.exit(1)
 
 
-# Run guards at import time. They are cheap and idempotent.
+# Run guards at import time.
 _check_ffmpeg_or_exit()
-_check_llm_key_or_exit()
+_check_llm_key_or_warn()
 
 
 # --- App factory ------------------------------------------------------------

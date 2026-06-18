@@ -13,10 +13,12 @@ startup:
    set, the process must exit with a clear, actionable error.
 
 The implementation lives in :mod:`app.main` as the
-:func:`_check_ffmpeg_or_exit` and :func:`_check_llm_key_or_exit`
-helpers, both of which are invoked at import time so the
-process never even starts serving traffic if the environment
-is broken.
+:func:`_check_ffmpeg_or_exit` and :func:`_check_llm_key_or_warn`
+helpers. ``ffmpeg`` is a hard requirement — the process exits
+if it's missing. The LLM key is a soft requirement — the
+process logs a warning and continues, so the UI can still
+serve the frontend while waiting for the user to configure
+their key.
 
 This module exercises every AC-14 sub-requirement:
 
@@ -55,7 +57,7 @@ if str(_BACKEND) not in sys.path:
 # the guards in the parent process — which is fine for unit
 # tests, since the test env has both ffmpeg and an LLM key.
 # The subprocess tests below exercise the *missing* env paths.
-from app.main import _check_ffmpeg_or_exit, _check_llm_key_or_exit  # noqa: E402
+from app.main import _check_ffmpeg_or_exit, _check_llm_key_or_warn  # noqa: E402
 
 
 # --- Fixtures ---------------------------------------------------------------
@@ -177,76 +179,55 @@ def test_check_ffmpeg_is_noop_when_present() -> None:
     _check_ffmpeg_or_exit()  # should not raise
 
 
-# --- _check_llm_key_or_exit: unit tests -------------------------------------
+# --- _check_llm_key_or_warn: unit tests --------------------------------------
 
 
-def test_check_llm_key_exits_with_code_1_when_missing(
-    clean_environ, capsys
-) -> None:
-    """AC-14: no LLM key -> process exits with code 1."""
-    with pytest.raises(SystemExit) as excinfo:
-        _check_llm_key_or_exit()
-    assert excinfo.value.code == 1, (
-        f"expected exit code 1, got {excinfo.value.code!r}"
-    )
-
-
-def test_check_llm_key_writes_to_stderr(clean_environ, capsys) -> None:
-    """AC-14: the error message goes to stderr."""
-    with pytest.raises(SystemExit):
-        _check_llm_key_or_exit()
+def test_check_llm_key_writes_warning_to_stderr(clean_environ, capsys) -> None:
+    """AC-14: no LLM key -> writes a warning to stderr (does NOT exit)."""
+    _check_llm_key_or_warn()  # should NOT raise SystemExit
     captured = capsys.readouterr()
     assert captured.out == "", (
         f"llm-guard should not write to stdout; got {captured.out!r}"
     )
-    assert "LLM" in captured.err or "API" in captured.err, (
-        f"stderr should mention 'LLM' or 'API'; got {captured.err!r}"
+    assert "WARNING" in captured.err, (
+        f"stderr should say 'WARNING'; got {captured.err!r}"
     )
-
-
-def test_check_llm_key_message_is_actionable(
-    clean_environ, capsys
-) -> None:
-    """AC-14: the error message names both possible keys and how to set them."""
-    with pytest.raises(SystemExit):
-        _check_llm_key_or_exit()
-    captured = capsys.readouterr()
     assert "ANTHROPIC_API_KEY" in captured.err, (
         f"stderr should mention ANTHROPIC_API_KEY; got {captured.err!r}"
     )
     assert "OPENAI_API_KEY" in captured.err, (
         f"stderr should mention OPENAI_API_KEY; got {captured.err!r}"
     )
-    # Actionability: mention .env.example or "set" / "export".
-    assert ".env" in captured.err.lower() or "set " in captured.err.lower(), (
-        f"stderr should tell the user how to set the key; got {captured.err!r}"
+
+
+def test_check_llm_key_silent_when_anthropic_set(monkeypatch, capsys) -> None:
+    """AC-14: when ANTHROPIC_API_KEY is set, the guard writes nothing."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    _check_llm_key_or_warn()
+    captured = capsys.readouterr()
+    assert captured.err == "", (
+        f"should not warn when key is set; got {captured.err!r}"
     )
 
 
-def test_check_llm_key_is_noop_when_anthropic_set(monkeypatch) -> None:
-    """AC-14: when ANTHROPIC_API_KEY is set, the guard is a no-op."""
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-    _check_llm_key_or_exit()  # should not raise
-
-
-def test_check_llm_key_is_noop_when_openai_set(monkeypatch) -> None:
-    """AC-14: when OPENAI_API_KEY is set, the guard is a no-op."""
+def test_check_llm_key_silent_when_openai_set(monkeypatch, capsys) -> None:
+    """AC-14: when OPENAI_API_KEY is set, the guard writes nothing."""
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    _check_llm_key_or_exit()  # should not raise
+    _check_llm_key_or_warn()
+    captured = capsys.readouterr()
+    assert captured.err == "", (
+        f"should not warn when key is set; got {captured.err!r}"
+    )
 
 
-def test_check_llm_key_treats_empty_string_as_missing(monkeypatch) -> None:
-    """AC-14: an empty-string LLM key is treated as missing.
-
-    A user who sets ``ANTHROPIC_API_KEY=`` in their .env
-    (forgot to fill it in) is functionally identical to not
-    having a key at all — the guard must reject both.
-    """
+def test_check_llm_key_warns_when_empty_string(monkeypatch, capsys) -> None:
+    """AC-14: an empty-string LLM key is treated as missing (warns, not exits)."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "")
     monkeypatch.setenv("OPENAI_API_KEY", "")
-    with pytest.raises(SystemExit):
-        _check_llm_key_or_exit()
+    _check_llm_key_or_warn()  # should NOT raise
+    captured = capsys.readouterr()
+    assert "WARNING" in captured.err
 
 
 # --- Subprocess tests: the import-time guards actually fire ----------------
@@ -318,21 +299,19 @@ def test_subprocess_import_exits_zero_when_env_ok() -> None:
 
 
 @pytest.mark.slow
-def test_subprocess_import_exits_1_when_no_llm_key() -> None:
-    """AC-14: with ffmpeg present but no LLM key, ``import app.main`` exits 1.
-
-    This is the production case where the user forgot to
-    set their API key. The startup guard must catch this
-    and exit 1 with a clear message on stderr.
+def test_subprocess_import_warns_when_no_llm_key() -> None:
+    """AC-14 relaxed: with ffmpeg present but no LLM key, ``import app.main``
+    logs a WARNING but does NOT exit 1 (so the UI can still serve).
     """
     env = _env_with_minimum_required()
     env.pop("ANTHROPIC_API_KEY", None)
     env["OPENAI_API_KEY"] = ""
     result = _run_subprocess(env)
-    assert result.returncode == 1, (
-        f"import app.main should exit 1 when no LLM key is set; "
+    assert result.returncode == 0, (
+        f"import app.main should succeed (exit 0) even without an LLM key; "
         f"stderr=\n{result.stderr}"
     )
+    assert "WARNING" in result.stderr
     assert "ANTHROPIC_API_KEY" in result.stderr
     assert "OPENAI_API_KEY" in result.stderr
 
@@ -395,13 +374,15 @@ def test_check_ffmpeg_message_says_startup_aborted(
     )
 
 
-def test_check_llm_key_message_says_startup_aborted(
+def test_check_llm_key_message_says_warning_not_aborted(
     clean_environ, capsys
 ) -> None:
-    """AC-14: the LLM-key error also says "startup aborted" for grep-ability."""
-    with pytest.raises(SystemExit):
-        _check_llm_key_or_exit()
+    """LLM-key warning says 'WARNING' (not 'aborted') — the app still starts."""
+    _check_llm_key_or_warn()
     captured = capsys.readouterr()
-    assert "startup aborted" in captured.err.lower(), (
-        f"stderr should say 'startup aborted'; got {captured.err!r}"
+    assert "WARNING" in captured.err, (
+        f"stderr should say 'WARNING'; got {captured.err!r}"
+    )
+    assert "aborted" not in captured.err.lower(), (
+        f"stderr should NOT say 'aborted'; got {captured.err!r}"
     )
