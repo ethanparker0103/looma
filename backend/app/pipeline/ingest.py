@@ -211,6 +211,15 @@ _YDL_DOWNLOAD_OPTS: dict[str, Any] = {
     "noplaylist": True,
     "quiet": True,
     "no_warnings": True,
+    "extractor_retries": 5,
+    "retries": 10,
+    "fragment_retries": 10,
+    "extractor_args": {
+        "youtube": {
+            "player_client": ["android", "web"],
+            "skip": ["webpage", "dash", "hls"],
+        },
+    },
     "postprocessors": [
         {
             "key": "FFmpegExtractAudio",
