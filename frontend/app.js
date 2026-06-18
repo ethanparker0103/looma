@@ -1368,14 +1368,12 @@
           }
         }
 
-        var transcriptPreview = t.transcript
-          ? t.transcript.substring(0, 500) + (t.transcript.length > 500 ? "…" : "")
-          : "";
+        var transcriptText = t.transcript || "";
         ui.lastResult = {
           title: "Transcription complete",
           audio_url: "",
           knowledge: {
-            summary: transcriptPreview,
+            summary: transcriptText,
             insights: [],
             chapters: basicChapters,
             narrative: "",
