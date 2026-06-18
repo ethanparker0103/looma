@@ -163,27 +163,41 @@
 
       <header class="result-title-row">
         <h3 id="result-title" class="result-title"></h3>
-        <button
-          type="button"
-          id="copy-md-button"
-          class="secondary-button"
-        >Copy as Markdown</button>
+        <div class="result-actions">
+          <button
+            type="button"
+            id="analyze-button"
+            class="primary-button"
+            hidden
+          >✨ Analyze with AI</button>
+          <button
+            type="button"
+            id="copy-md-button"
+            class="secondary-button"
+          >Copy as Markdown</button>
+        </div>
       </header>
 
       <div class="result-grid">
         <article class="result-card">
           <h4 class="result-card__heading">Summary</h4>
           <p id="result-summary" class="result-card__body"></p>
+          <p id="summary-empty-hint" class="empty-hint" hidden>
+            <span id="summary-hint-text">Click "✨ Analyze with AI" to generate a summary.</span>
+            <span id="settings-hint-text" hidden>Open <strong>⚙️ Settings</strong> to add your API key first.</span>
+          </p>
         </article>
 
         <article class="result-card">
           <h4 class="result-card__heading">Key insights</h4>
           <ul id="result-insights" class="insights"></ul>
+          <p id="insights-empty-hint" class="empty-hint" hidden>Click "✨ Analyze with AI" to generate insights.</p>
         </article>
 
         <article class="result-card result-card--wide">
           <h4 class="result-card__heading">Chapters</h4>
           <ol id="result-chapters" class="chapters"></ol>
+          <p id="chapters-empty-hint" class="empty-hint" hidden>Click "✨ Analyze with AI" to generate chapters.</p>
         </article>
 
         <article class="result-card result-card--wide">

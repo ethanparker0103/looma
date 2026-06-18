@@ -369,6 +369,19 @@ a { color: var(--accent); }
   flex-wrap: wrap;
 }
 
+.result-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.empty-hint {
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  font-style: italic;
+  margin: 0.5rem 0 0;
+}
+
 .result-title {
   margin: 0;
   font-size: 1.5rem;

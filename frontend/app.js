@@ -143,10 +143,16 @@
     chaptersEl: null,
     narrativeEl: null,
     copyButton: null,
+    analyzeButton: null,
+    summaryHint: null,
+    settingsHint: null,
+    insightsHint: null,
+    chaptersHint: null,
     submitButtons: [],
     formYoutube: null,
     formUpload: null,
     lastResult: null,
+    lastTranscriptionData: null,  // raw transcription for re-analysis
     progressTimer: null,
   };
 
@@ -167,6 +173,11 @@
     ui.chaptersEl = $("#result-chapters");
     ui.narrativeEl = $("#result-narrative");
     ui.copyButton = $("#copy-md-button");
+    ui.analyzeButton = $("#analyze-button");
+    ui.summaryHint = $("#summary-empty-hint");
+    ui.settingsHint = $("#settings-hint-text");
+    ui.insightsHint = $("#insights-empty-hint");
+    ui.chaptersHint = $("#chapters-empty-hint");
     ui.submitButtons = [$("#submit-youtube"), $("#submit-upload")];
     ui.formYoutube = $("#form-youtube");
     ui.formUpload = $("#form-upload");
@@ -352,6 +363,74 @@
       copyToClipboard(md).then(function (ok) {
         showToast(ok ? "Copied as Markdown" : "Copy failed");
       });
+    });
+  }
+
+  // --- Analyze with AI button ---------------------------------------
+
+  function initAnalyzeButton() {
+    if (!ui.analyzeButton) return;
+    ui.analyzeButton.addEventListener("click", function () {
+      // If no API key, open Settings instead
+      if (!hasValidSettings()) {
+        var modal = document.getElementById("settings-modal");
+        if (modal) {
+          // Populate form with saved values before showing
+          var provEl = document.getElementById("settings-provider");
+          var keyEl = document.getElementById("settings-apikey");
+          var domainEl = document.getElementById("settings-domain");
+          var modelEl = document.getElementById("settings-model");
+          var s = loadSettings();
+          if (provEl) provEl.value = s.provider;
+          if (keyEl) keyEl.value = s.apiKey;
+          if (domainEl) domainEl.value = s.domain;
+          if (modelEl) modelEl.value = s.model;
+          var testResult = document.getElementById("settings-test-result");
+          if (testResult) testResult.hidden = true;
+          modal.hidden = false;
+        }
+        return;
+      }
+
+      var data = ui.lastTranscriptionData;
+      if (!data) {
+        showToast("No transcription data available.");
+        return;
+      }
+      runLLMExtraction(data);
+    });
+  }
+
+  function runLLMExtraction(data) {
+    ui.analyzeButton.disabled = true;
+    ui.analyzeButton.textContent = "⏳ Analyzing…";
+    setBusy(true);
+    ui.progressEl.hidden = false;
+    if (ui.progressMsg) ui.progressMsg.textContent = "Extracting knowledge via LLM…";
+    updateProgressBar(90);
+    setStagesFromStatus("transcribing");
+
+    extractWithLLM(data).then(function (knowledge) {
+      var renderable = {
+        title: knowledge.title,
+        audio_url: "",
+        knowledge: knowledge,
+      };
+      ui.lastResult = renderable;
+      clearError();
+      ui.resultsEl.hidden = false;
+      renderResult(renderable);
+      finishProgress();
+      setBusy(false);
+      ui.analyzeButton.disabled = false;
+      ui.analyzeButton.textContent = "✨ Analyze with AI";
+      ui.analyzeButton.hidden = true;
+    }).catch(function (err) {
+      setBusy(false);
+      showError(err.message || "LLM extraction failed.", "LLM_ERROR");
+      ui.progressEl.hidden = true;
+      ui.analyzeButton.disabled = false;
+      ui.analyzeButton.textContent = "✨ Retry Analysis";
     });
   }
 
@@ -1131,62 +1210,66 @@
     if (resp.status === 200) {
       var data = resp.data;
 
-      // Check if we have transcription data (BYOK path)
-      if (data && data.transcription && hasValidSettings()) {
-        // We have transcription + valid LLM settings — run extraction
-        setBusy(true);
-        ui.progressEl.hidden = false;
-        if (ui.progressMsg) ui.progressMsg.textContent = "Extracting knowledge via LLM…";
-        updateProgressBar(90);
-        setStagesFromStatus("transcribing");
+      // Store raw transcription so the "Analyze with AI" button can use it
+      if (data && data.transcription) {
+        ui.lastTranscriptionData = data;
+      }
 
-        extractWithLLM(data).then(function (knowledge) {
-          // Build a renderable result object
-          var renderable = {
-            title: knowledge.title,
-            audio_url: "",
-            knowledge: knowledge,
-          };
-          ui.lastResult = renderable;
-          clearError();
-          ui.resultsEl.hidden = false;
-          renderResult(renderable);
-          finishProgress();
-          setBusy(false);
-        }).catch(function (err) {
-          setBusy(false);
-          showError(err.message || "LLM extraction failed.", "LLM_ERROR");
-          ui.progressEl.hidden = true;
-          // Still show the raw transcription so the user can copy it
-          ui.resultsEl.hidden = false;
-          if (data.transcription && data.transcription.transcript) {
-            ui.lastResult = {
-              title: "Transcription only (LLM extraction failed)",
-              knowledge: { summary: data.transcription.transcript, insights: [], chapters: [], narrative: "" },
-            };
-            renderResult(ui.lastResult);
-          }
-        });
+      // Check if we have transcription data and LLM is configured — auto-run
+      if (data && data.transcription && hasValidSettings()) {
+        runLLMExtraction(data);
         return;
       }
 
-      // No LLM configured — render what we have (transcription only)
+      // No LLM configured — show raw transcription + Analyze button
       if (data && data.transcription) {
         var t = data.transcription;
+        var transcriptPreview = t.transcript
+          ? t.transcript.substring(0, 500) + (t.transcript.length > 500 ? "…" : "")
+          : "";
         ui.lastResult = {
           title: "Transcription complete",
           audio_url: "",
-          knowledge: { summary: t.transcript || "", insights: [], chapters: [], narrative: "" },
+          knowledge: { summary: transcriptPreview, insights: [], chapters: [], narrative: "" },
         };
         renderResult(ui.lastResult);
         finishProgress();
-        // Show a hint about configuring LLM
-        if (!hasValidSettings()) {
-          showToast("Click ⚙️ to add your API key for AI-powered extraction");
+
+        // Show the Analyze button and empty-state hints
+        ui.analyzeButton.hidden = false;
+        if (hasValidSettings()) {
+          ui.analyzeButton.textContent = "✨ Analyze with AI";
+          ui.analyzeButton.disabled = false;
+          if (ui.summaryHint) {
+            ui.summaryHint.hidden = false;
+            ui.settingsHint.hidden = true;
+            document.getElementById("summary-hint-text").textContent =
+              'Click "✨ Analyze with AI" above to generate a structured summary.';
+          }
+        } else {
+          ui.analyzeButton.textContent = "⚙️ Add API Key";
+          ui.analyzeButton.disabled = false;
+          if (ui.summaryHint) {
+            ui.summaryHint.hidden = false;
+            ui.settingsHint.hidden = false;
+          }
         }
+        if (ui.insightsHint) ui.insightsHint.hidden = false;
+        if (ui.chaptersHint) ui.chaptersHint.hidden = false;
         return;
       }
 
+      // Full knowledge result (after LLM extraction) — hide button & hints
+      if (data && data.knowledge) {
+        if (data.knowledge.insights && data.knowledge.insights.length) {
+          if (ui.insightsHint) ui.insightsHint.hidden = true;
+        }
+        if (data.knowledge.chapters && data.knowledge.chapters.length) {
+          if (ui.chaptersHint) ui.chaptersHint.hidden = true;
+        }
+      }
+      ui.analyzeButton.hidden = true;
+      if (ui.summaryHint) ui.summaryHint.hidden = true;
       renderResult(data);
       finishProgress();
     } else {
@@ -1204,7 +1287,8 @@
     initTabs();
     initForms();
     initCopyButton();
-    initSettings();  // <-- new
+    initAnalyzeButton();
+    initSettings();
     restoreJobFromHash();
   }
 
