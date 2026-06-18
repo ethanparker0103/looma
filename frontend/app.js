@@ -1345,13 +1345,32 @@
       // No LLM configured — show raw transcription + Analyze button
       if (data && data.transcription) {
         var t = data.transcription;
+
+        // Build basic chapters from Whisper segments (no LLM titles)
+        var basicChapters = [];
+        if (data.segments && data.segments.length > 0) {
+          var segs = data.segments;
+          for (var si = 0; si < segs.length; si++) {
+            basicChapters.push({
+              start_seconds: segs[si].start,
+              end_seconds: segs[si].end,
+              title: "",  // empty title — LLM needed to name this segment
+            });
+          }
+        }
+
         var transcriptPreview = t.transcript
           ? t.transcript.substring(0, 500) + (t.transcript.length > 500 ? "…" : "")
           : "";
         ui.lastResult = {
           title: "Transcription complete",
           audio_url: "",
-          knowledge: { summary: transcriptPreview, insights: [], chapters: [], narrative: "" },
+          knowledge: {
+            summary: transcriptPreview,
+            insights: [],
+            chapters: basicChapters,
+            narrative: "",
+          },
         };
         renderResult(ui.lastResult);
         finishProgress();
@@ -1376,7 +1395,10 @@
           }
         }
         if (ui.insightsHint) ui.insightsHint.hidden = false;
-        if (ui.chaptersHint) ui.chaptersHint.hidden = false;
+        // Hide chapters hint if we rendered basic segments as chapters
+        if (ui.chaptersHint) {
+          ui.chaptersHint.hidden = basicChapters.length > 0;
+        }
         return;
       }
 
